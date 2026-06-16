@@ -1,0 +1,16 @@
+[
+  {
+    "project": "glasses",
+    "memory_type": "constraint",
+    "content": "用户不接受 3-4 cm 焦距的光学结构。",
+    "importance": 0.9,
+    "confidence": 0.95
+  },
+  {
+    "project": "glasses",
+    "memory_type": "task_state",
+    "content": "当前目标是先让 STM32 点亮 TFT 屏幕。",
+    "importance": 0.8,
+    "confidence": 0.9
+  }
+]
