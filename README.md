@@ -1,5 +1,7 @@
 # hippocampus-memory
 
+Reducing tokens through external memory.
+
 `hippocampus-memory` 是一个本地优先的 AI 外部记忆与 vibe coding 上下文压缩系统。它不是普通 RAG 问答工具，而是给 Codex、Claude Code、DeepSeek、本地 Agent 等工具使用的“外部海马体”：把长期偏好、项目状态、历史决策、失败经验、约束、代码语义和影响范围保存到本地，再按当前任务召回、重排、压缩成短小的上下文包。
 
 核心目标不是“存很多东西”，而是精准召回、去重、压缩、标记过期、处理冲突，并帮助 AI 用最少 token 理解项目、选择最小改动方向。
