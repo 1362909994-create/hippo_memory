@@ -32,3 +32,16 @@
 - 不要破坏现有 API、CLI 命令和数据库迁移兼容性。
 - 猜测不能写成事实，低置信度信息的 `confidence` 不应超过 `0.6`。
 - 删除逻辑必须区分 soft delete 和 hard delete；用户明确要求删除时要支持彻底删除。
+
+<!-- hippocampus-memory:start -->
+## Hippocampus Memory
+
+- This project is deployed with project-local hippocampus-memory as `hippocampus-memory`.
+- The MCP server name is `hippo_memory`; prefer its automatic tools when external project memory, impact analysis, or compact context would help.
+- At the start of non-trivial coding/debugging/architecture tasks, call `hippo_memory_context_auto` with the current task intent. Use `session_key="reasonix"` unless the user gives a better session name. Trust the tool when it returns that no external memory is needed.
+- When `hippo_memory_context_auto` returns `token_savings_text`, or its text says `Show this token savings line to the user:`, include that token savings line in the final user-facing Reasonix UI reply. Do not leave it hidden in tool output or reasoning only.
+- For direct symbol questions use `hippo_memory_code_symbols` or `hippo_memory_code_references`; otherwise prefer `hippo_memory_context_auto` over manually choosing profile, impact, callback, or bundle tools.
+- Near the end of a meaningful session, call `hippo_memory_memory_auto_store` with a concise transcript summary. It will write high-confidence non-sensitive memories, queue uncertain memories, and skip low-value content.
+- Do not recall private/sensitive memories unless explicitly requested. Do not force long-term writes for sensitive or uncertain facts.
+- Keep recalled context short, cite files when making code claims, make minimal changes, and run relevant tests.
+<!-- hippocampus-memory:end -->

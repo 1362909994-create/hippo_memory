@@ -12,12 +12,16 @@ from hippocampus_memory.config import Settings
 from hippocampus_memory.consolidator import Consolidator
 from hippocampus_memory.db import Database
 from hippocampus_memory.lsp_diagnostics import run_python_diagnostics
+from hippocampus_memory.memory_policy import auto_store_memories
 from hippocampus_memory.memory_writer import MemoryWriter
 from hippocampus_memory.packer import MemoryPacker
 from hippocampus_memory.project_indexer import ProjectIndexer
 from hippocampus_memory.project_profile import ProjectProfileBuilder
+from hippocampus_memory.recall_policy import build_auto_context
 from hippocampus_memory.retriever import Retriever
 from hippocampus_memory.schemas import (
+    AutoContextRequest,
+    AutoStoreRequest,
     CandidateAcceptRequest,
     CodeDiagnosticsRequest,
     CodeIntelligenceRequest,
@@ -81,6 +85,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def pack_memory(payload: MemoryPackRequest) -> MemoryPackResponse:
         pack = MemoryPacker(db).pack(**payload.model_dump())
         return MemoryPackResponse(pack=pack)
+
+    @app.post("/memory/auto-store")
+    def auto_store(payload: AutoStoreRequest) -> dict:
+        try:
+            return auto_store_memories(db, **payload.model_dump())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/context/auto")
+    def auto_context(payload: AutoContextRequest) -> dict:
+        return build_auto_context(db, **payload.model_dump())
 
     @app.post("/memory/consolidate")
     def consolidate(payload: ConsolidateRequest) -> dict:

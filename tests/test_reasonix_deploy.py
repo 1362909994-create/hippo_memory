@@ -8,9 +8,13 @@ from hippocampus_memory.cli import app
 from hippocampus_memory.deploy import (
     REASONIX_PROJECT_SPEC,
     deploy_reasonix,
+    ensure_reasonix_global_memory,
+    install_reasonix_command_shims,
     install_reasonix_mcp_spec,
+    patch_reasonix_status_bar,
     project_mcp_database,
     reasonix_fixed_mcp_spec,
+    write_reasonix_bootstrap_context,
 )
 
 
@@ -31,14 +35,21 @@ def test_reasonix_deploy_creates_project_local_mcp(tmp_path):
         encoding="utf-8"
     ).strip() == REASONIX_PROJECT_SPEC
     assert (root / "REASONIX.md").exists()
-    assert "hippo_memory_context_callback" in (root / "REASONIX.md").read_text(
-        encoding="utf-8"
-    )
+    memory_text = (root / "REASONIX.md").read_text(encoding="utf-8")
+    assert "hippo_memory_context_auto" in memory_text
+    assert "hippo_memory_memory_auto_store" in memory_text
+    assert "token_savings_text" in memory_text
+    assert "final user-facing Reasonix UI reply" in memory_text
     assert ".hippo/" in (root / ".gitignore").read_text(encoding="utf-8")
     assert result["index"]["indexed_files"] >= 1
 
     cfg = json.loads(config_path.read_text(encoding="utf-8"))
     assert cfg["mcp"] == [REASONIX_PROJECT_SPEC]
+    global_memory = config_path.parent / "REASONIX.md"
+    assert global_memory.exists()
+    global_memory_text = global_memory.read_text(encoding="utf-8")
+    assert "hippo_memory_context_auto" in global_memory_text
+    assert "final user-facing Reasonix UI reply" in global_memory_text
 
     db = project_mcp_database(root / "src")
     assert db.path == root / ".hippo" / "hippo.db"
@@ -114,7 +125,9 @@ def test_reasonix_deploy_appends_existing_agents_instead_of_shadowing(tmp_path):
     assert not (root / "REASONIX.md").exists()
     text = agents.read_text(encoding="utf-8")
     assert "# Existing instructions" in text
-    assert "hippo_memory_context_callback" in text
+    assert "hippo_memory_context_auto" in text
+    assert "hippo_memory_memory_auto_store" in text
+    assert "token_savings_text" in text
 
 
 def test_reasonix_deploy_can_skip_project_memory(tmp_path):
@@ -131,3 +144,145 @@ def test_reasonix_deploy_can_skip_project_memory(tmp_path):
 
     assert result["reasonix_project_memory"] is None
     assert not (root / "REASONIX.md").exists()
+
+
+def test_project_mcp_database_falls_back_to_global_db(tmp_path, monkeypatch):
+    global_db = tmp_path / "global.db"
+    monkeypatch.setenv("HIPPO_DB_PATH", str(global_db))
+    root = tmp_path / "undeployed"
+    root.mkdir()
+
+    db = project_mcp_database(root)
+
+    assert db.path == global_db
+    assert global_db.exists()
+
+
+def test_reasonix_global_memory_is_idempotent(tmp_path):
+    path, updated = ensure_reasonix_global_memory(tmp_path)
+    again, updated_again = ensure_reasonix_global_memory(tmp_path)
+
+    assert path == again
+    assert updated
+    assert not updated_again
+    text = path.read_text(encoding="utf-8")
+    assert "hippo_memory_context_auto" in text
+    assert text.count("hippocampus-memory:start") == 1
+
+
+def test_reasonix_command_shim_wraps_code_invocations(tmp_path):
+    bin_dir = tmp_path / "npm"
+    bin_dir.mkdir()
+    (bin_dir / "reasonix.ps1").write_text("original ps1\n", encoding="utf-8")
+    (bin_dir / "reasonix.cmd").write_text("original cmd\n", encoding="utf-8")
+
+    result = install_reasonix_command_shims(bin_dir)
+    again = install_reasonix_command_shims(bin_dir)
+
+    ps1 = (bin_dir / "reasonix.ps1").read_text(encoding="utf-8")
+    cmd = (bin_dir / "reasonix.cmd").read_text(encoding="utf-8")
+    assert result["ps1_updated"]
+    assert result["cmd_updated"]
+    assert not again["ps1_updated"]
+    assert not again["cmd_updated"]
+    assert "HIPPO_MEMORY_REASONIX_SHIM" in ps1
+    assert "reasonix-bootstrap-context" in ps1
+    assert "--status-output" in ps1
+    assert "HIPPO_REASONIX_STATUS_FILE" in ps1
+    assert "--system-append-file" in ps1
+    assert "reasonix.ps1" in cmd
+    assert (bin_dir / "reasonix.ps1.hippo-original").exists()
+    assert (bin_dir / "reasonix.cmd.hippo-original").exists()
+    assert result["status_bar_patch"]["reason"] == "reasonix_cli_dir_not_found"
+
+
+def test_reasonix_status_bar_patch_is_idempotent(tmp_path):
+    bin_dir = tmp_path / "npm"
+    cli_dir = bin_dir / "node_modules" / "reasonix" / "dist" / "cli"
+    cli_dir.mkdir(parents=True)
+    chunk = cli_dir / "chunk-demo.js"
+    chunk.write_text(
+        "\n".join(
+            [
+                'import { formatTokens } from "./chunk-demo2.js";',
+                "function Pill({ children }) {",
+                "  return /* @__PURE__ */ import_react16.default.createElement(",
+                "    Box_default, {}, children",
+                "  );",
+                "}",
+                "function Gap() {",
+                "  return /* @__PURE__ */ import_react16.default.createElement(",
+                '    Text, null, " "',
+                "  );",
+                "}",
+                "function StatusRow({",
+                "  statusBar = DEFAULT_STATUS_BAR_CONFIG",
+                "}) {",
+                "  return /* @__PURE__ */ import_react16.default.createElement(",
+                "    Box_default, null,",
+                "    statusBar.showCacheHit &&",
+                "    /* @__PURE__ */ import_react16.default.createElement(",
+                "      import_react16.default.Fragment, null,",
+                "      /* @__PURE__ */ import_react16.default.createElement(Gap, null),",
+                "      /* @__PURE__ */ import_react16.default.createElement(",
+                "        Pill, null,",
+                "        /* @__PURE__ */ import_react16.default.createElement(",
+                "          Text, { color: TONE.accent },",
+                '          `${t("statusBar.cache")} ${Math.round(status2.cacheHit * 100)}%`)))'
+                ", statusBar.showCtxUsage && true);",
+                "}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = patch_reasonix_status_bar(bin_dir)
+    again = patch_reasonix_status_bar(bin_dir)
+
+    text = chunk.read_text(encoding="utf-8")
+    assert result["patched"]
+    assert again["reason"] == "already_patched"
+    assert "HIPPO_REASONIX_STATUS_BAR_PATCH" in text
+    assert "HIPPO_REASONIX_STATUS_BAR_PATCH v5" in text
+    assert "HIPPO_REASONIX_STATUS_FILE" in text
+    assert "HippoSavingsPill" in text
+    assert "sessionId: session.id" in text
+    assert "promptTokens: status2.promptTokens" in text
+    assert "turnCost: status2.cost" in text
+    assert "reasonix_cost_turns_v2" in text
+    assert "legacy_saved_tokens" in text
+    assert "last_saved_tokens" in text
+    assert "turn_count" in text
+    assert "节省 本轮" in text
+    assert "会话" in text
+    assert "statusBar.showCtxUsage" in text
+    assert (cli_dir / "chunk-demo.js.hippo-status-original").exists()
+
+
+def test_reasonix_bootstrap_context_includes_token_savings(tmp_path, monkeypatch):
+    db_path = tmp_path / "global.db"
+    monkeypatch.setenv("HIPPO_DB_PATH", str(db_path))
+    root = tmp_path / "demo"
+    root.mkdir()
+    (root / "app.py").write_text("def hello():\n    return 'ok'\n", encoding="utf-8")
+    deploy_reasonix(root, project="demo", install_global=False)
+
+    output = tmp_path / "context.md"
+    status_output = tmp_path / "status.json"
+    path = write_reasonix_bootstrap_context(root, output, status_output=status_output)
+
+    text = path.read_text(encoding="utf-8")
+    status = json.loads(status_output.read_text(encoding="utf-8"))
+    assert "Hippocampus Memory bootstrap for Reasonix" in text
+    assert "Show this token savings line to the user:" in text
+    assert "Token savings:" in text
+    assert status["available"]
+    assert status["scope"] == "reasonix_session"
+    assert status["project"] == "demo"
+    assert status["run_id"]
+    ledger_dir = status["session_ledger_dir"].replace("\\", "/")
+    assert ledger_dir.endswith(".hippo/reasonix-session-savings")
+    assert status["saved_tokens"] >= 0
+    assert status["session_saved_tokens"] == 0
+    assert status["total_saved_tokens"] == 0
+    assert status["project_total_saved_tokens"] >= status["saved_tokens"]

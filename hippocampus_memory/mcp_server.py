@@ -13,10 +13,12 @@ from hippocampus_memory.code_map import CodeMapBuilder
 from hippocampus_memory.context_bundle import ContextBundleBuilder
 from hippocampus_memory.db import Database
 from hippocampus_memory.lsp_diagnostics import run_python_diagnostics
+from hippocampus_memory.memory_policy import auto_store_memories
 from hippocampus_memory.memory_writer import MemoryWriter
 from hippocampus_memory.models import SearchResult
 from hippocampus_memory.packer import MemoryPacker
 from hippocampus_memory.project_profile import ProjectProfileBuilder
+from hippocampus_memory.recall_policy import build_auto_context
 from hippocampus_memory.retriever import Retriever
 from hippocampus_memory.utils import dumps_json, normalize_text
 
@@ -63,6 +65,22 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "compact": {"type": "boolean"},
                 "exclude_memory_ids": {"type": "array", "items": {"type": "string"}},
                 "session_dedupe": {"type": "boolean"},
+            },
+        },
+    },
+    "memory.auto_store": {
+        "description": "Automatically write, queue, or skip useful long-term memories.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["text"],
+            "properties": {
+                "text": {"type": "string"},
+                "project": {"type": "string"},
+                "source": {"type": "string"},
+                "mode": {"type": "string"},
+                "max_candidates": {"type": "integer"},
+                "allow_sensitive": {"type": "boolean"},
+                "dry_run": {"type": "boolean"},
             },
         },
     },
@@ -144,6 +162,20 @@ TOOLS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "context.auto": {
+        "description": "Automatically decide whether and how to recall external memory.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["intent"],
+            "properties": {
+                "intent": {"type": "string"},
+                "project": {"type": "string"},
+                "session_key": {"type": "string"},
+                "max_tokens": {"type": "integer"},
+                "include_code_map": {"type": "boolean"},
+            },
+        },
+    },
     "context.callback": {
         "description": "Generate a project-scoped callback pack and remember injected memories.",
         "inputSchema": {
@@ -177,12 +209,28 @@ TOOLS: dict[str, dict[str, Any]] = {
 
 SAFE_TOOL_NAMES = {name: name.replace(".", "_") for name in TOOLS}
 CANONICAL_TOOL_NAMES = {safe_name: name for name, safe_name in SAFE_TOOL_NAMES.items()}
+SERVER_INSTRUCTIONS = (
+    "Hippocampus Memory provides external memory and compact context. "
+    "For non-trivial coding, debugging, project-review, or architecture tasks, call "
+    "`context_auto`/`hippo_memory_context_auto` before reading lots of files. "
+    "When the result includes `token_savings_text` or says "
+    "`Show this token savings line to the user:`, include that token savings line in "
+    "the final user-facing reply. Near the end of meaningful work, call "
+    "`memory_auto_store`/`hippo_memory_memory_auto_store` with a concise session summary."
+)
 
 
 class HippoMcpServer:
-    def __init__(self, db: Database, *, safe_tool_names: bool = False) -> None:
+    def __init__(
+        self,
+        db: Database,
+        *,
+        safe_tool_names: bool = False,
+        default_project: str | None = None,
+    ) -> None:
         self.db = db
         self.safe_tool_names = safe_tool_names
+        self.default_project = default_project
 
     def handle(self, message: dict[str, Any]) -> dict[str, Any] | None:
         method = message.get("method")
@@ -194,6 +242,7 @@ class HippoMcpServer:
                     "protocolVersion": "2024-11-05",
                     "capabilities": {"tools": {}},
                     "serverInfo": {"name": "hippocampus-memory", "version": "0.1.0"},
+                    "instructions": SERVER_INSTRUCTIONS,
                 }
             elif method == "ping":
                 result = {}
@@ -238,6 +287,9 @@ class HippoMcpServer:
             }
         if name == "memory.pack":
             return {"text": MemoryPacker(self.db).pack(**arguments)}
+        if name == "memory.auto_store":
+            arguments = self._with_default_project(arguments)
+            return auto_store_memories(self.db, **arguments)
         if name == "project.profile":
             return {"text": ProjectProfileBuilder(self.db).build(str(arguments["project"]))}
         if name == "project.impact":
@@ -288,6 +340,14 @@ class HippoMcpServer:
             }
         if name == "context.bundle":
             return {"text": ContextBundleBuilder(self.db).build(**arguments)}
+        if name == "context.auto":
+            arguments = self._with_default_project(arguments)
+            return build_auto_context(
+                self.db,
+                **arguments,
+                track_token_savings=True,
+                include_savings_in_text=True,
+            )
         if name == "context.callback":
             return callback_pack(self.db, **arguments)
         if name == "candidate.list":
@@ -306,9 +366,23 @@ class HippoMcpServer:
             }
         raise ValueError(f"Unknown tool: {name}")
 
+    def _with_default_project(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        if arguments.get("project") or not self.default_project:
+            return arguments
+        return {**arguments, "project": self.default_project}
 
-def serve_stdio(db: Database, *, safe_tool_names: bool = False) -> None:
-    server = HippoMcpServer(db, safe_tool_names=safe_tool_names)
+
+def serve_stdio(
+    db: Database,
+    *,
+    safe_tool_names: bool = False,
+    default_project: str | None = None,
+) -> None:
+    server = HippoMcpServer(
+        db,
+        safe_tool_names=safe_tool_names,
+        default_project=default_project,
+    )
     for line in sys.stdin:
         if not line.strip():
             continue

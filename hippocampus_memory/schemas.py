@@ -83,6 +83,24 @@ class TextPackResponse(BaseModel):
     text: str
 
 
+class AutoStoreRequest(BaseModel):
+    text: str
+    project: str | None = None
+    source: str = "auto_store"
+    mode: Literal["auto", "write", "queue", "preview"] = "auto"
+    max_candidates: int = 12
+    allow_sensitive: bool = False
+    dry_run: bool = False
+
+
+class AutoContextRequest(BaseModel):
+    intent: str
+    project: str | None = None
+    session_key: str = "default"
+    max_tokens: int = 3500
+    include_code_map: bool = True
+
+
 class ConsolidateRequest(BaseModel):
     project: str | None = None
 

@@ -1,6 +1,6 @@
 # hippocampus-memory
 
-Reducing tokens through external memory.
+Reasonix-first external memory and token-saving context for AI coding.
 
 `hippocampus-memory` 是一个本地优先的 AI 外部记忆与 vibe coding 上下文压缩系统。它不是普通 RAG 问答工具，而是给 Codex、Claude Code、DeepSeek、本地 Agent 等工具使用的“外部海马体”：把长期偏好、项目状态、历史决策、失败经验、约束、代码语义和影响范围保存到本地，再按当前任务召回、重排、压缩成短小的上下文包。
 
@@ -16,11 +16,45 @@ Reducing tokens through external memory.
 
 ## 安装
 
+如果你只想在 Reasonix 里自动使用外部记忆，推荐走一键入口：
+
+```powershell
+git clone https://github.com/1362909994-create/hippo_memory.git
+cd hippo_memory
+.\install-reasonix-hippo.ps1 -ProjectRoot D:\your_project -ProjectName your_project
+reasonix code D:\your_project
+```
+
+脚本会安装 `hippo`、部署项目记忆、配置 Reasonix MCP、安装全局 shim，并给 Reasonix 底部状态栏加上按会话统计的 token 节省显示。
+
+开发本项目时再使用 editable 安装：
+
 ```powershell
 cd D:\prj\hippocampus-memory
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e .[dev]
+```
+
+### Reasonix 一键安装入口
+
+用户从 GitHub 下载本仓库后，可以在仓库根目录直接运行：
+
+```powershell
+.\install-reasonix-hippo.ps1 -ProjectRoot D:\your_project -ProjectName your_project
+```
+
+这个脚本会安装 `hippocampus-memory`、安装 Reasonix 全局 shim 和状态栏补丁，并对目标项目执行 `hippo reasonix-deploy`。
+如果只是想部署当前目录，可以省略参数：
+
+```powershell
+.\install-reasonix-hippo.ps1
+```
+
+如果机器没有 Python 3.11+，可以让脚本尝试用 winget 安装：
+
+```powershell
+.\install-reasonix-hippo.ps1 -InstallPythonWithWinget
 ```
 
 第一版为了 Windows 上稳定运行，没有强制安装 FAISS/Chroma 或 sentence-transformers。代码保留了 `EmbeddingBackend` 和 `VectorStore` 抽象，默认使用本地 hash embedding + SQLite JSON 向量降级实现；以后可以替换成 FAISS、Chroma、sentence-transformers、OpenAI 或本地模型。
@@ -108,6 +142,41 @@ hippo consolidate --project "glasses-display"
 hippo memory-supersede mem_old mem_new
 hippo stats
 ```
+
+## 自动记忆与自动调度
+
+部署后的推荐入口是自动策略，而不是让宿主 AI 手动选择每一个底层命令。
+
+自动存储会从会话摘要或任务结果里筛选长期有价值的内容：高置信、非敏感的偏好、约束、决策、失败经验、任务状态会直接写入；中等置信或敏感内容默认进入候选队列；低价值闲聊、重复日志和临时噪音会跳过。
+
+```powershell
+hippo auto-store --project hippocampus-memory --text "Decision: use context.auto as the default recall entry."
+hippo auto-store --project hippocampus-memory --path .\chat-summary.txt --mode preview
+hippo candidate-list --project hippocampus-memory
+hippo candidate-accept <candidate-id>
+```
+
+自动召回会根据当前 intent 决定是否需要外部记忆，以及返回哪种上下文：小闲聊不召回；继续任务返回 compact callback pack；代码修改/调试返回 lean context bundle；项目概览返回 full context bundle；显式记忆查询返回 Memory Pack。
+
+```powershell
+hippo auto-context "continue" --project hippocampus-memory
+hippo auto-context "fix search ranking bug" --project hippocampus-memory --metadata
+```
+
+`pack`、`auto-context` 和 `run` 默认会在 CLI 中显示 token 账本：本次输出相对朴素上下文估算节省了多少 token，以及该项目历史累计节省了多少 token。统计会写入项目级 `token_ledger`，上下文本体仍正常输出；不想记录时可加 `--no-token-stats`。
+
+```powershell
+hippo pack "continue" --project hippocampus-memory
+hippo auto-context "fix search ranking bug" --project hippocampus-memory --token-model gpt-4o
+hippo token-ledger --project hippocampus-memory
+```
+
+MCP 部署时优先使用高层工具：
+
+- `memory.auto_store` / safe name `memory_auto_store`
+- `context.auto` / safe name `context_auto`
+
+`reasonix-deploy` 写入的项目提示也会引导宿主 AI 优先调用 `context_auto`，并在有意义的会话结束时调用 `memory_auto_store`。
 
 常用降 token / 去重参数：
 

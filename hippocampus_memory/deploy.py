@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +20,9 @@ HIPPO_DIR_NAME = ".hippo"
 HIPPO_DB_NAME = "hippo.db"
 REASONIX_SERVER_NAME = "hippo_memory"
 REASONIX_PROJECT_SPEC = f"{REASONIX_SERVER_NAME}=hippo mcp-project"
+REASONIX_SHIM_MARKER = "HIPPO_MEMORY_REASONIX_SHIM"
+REASONIX_STATUS_PATCH_MARKER = "HIPPO_REASONIX_STATUS_BAR_PATCH"
+REASONIX_STATUS_PATCH_VERSION = "v5"
 REASONIX_MEMORY_FILES = (
     "REASONIX.md",
     ".claude/CLAUDE.md",
@@ -116,6 +122,9 @@ def deploy_reasonix(
 
     reasonix_config = None
     reasonix_config_updated = False
+    reasonix_global_memory = None
+    reasonix_global_memory_updated = False
+    reasonix_shim = None
     if install_global:
         reasonix_config = (
             Path(config_path).expanduser() if config_path else default_reasonix_config_path()
@@ -125,6 +134,11 @@ def deploy_reasonix(
             REASONIX_PROJECT_SPEC,
             server_name=REASONIX_SERVER_NAME,
         )
+        reasonix_global_memory, reasonix_global_memory_updated = ensure_reasonix_global_memory(
+            reasonix_config.parent
+        )
+        if config_path is None:
+            reasonix_shim = install_reasonix_command_shims()
 
     return {
         "project": project_name,
@@ -143,6 +157,11 @@ def deploy_reasonix(
         "reasonix_project_memory_updated": memory_file_updated,
         "reasonix_config": str(reasonix_config) if reasonix_config else None,
         "reasonix_config_updated": reasonix_config_updated,
+        "reasonix_global_memory": (
+            str(reasonix_global_memory) if reasonix_global_memory else None
+        ),
+        "reasonix_global_memory_updated": reasonix_global_memory_updated,
+        "reasonix_shim": reasonix_shim,
         "gitignore_updated": gitignore_updated,
         "next": {
             "auto": f"reasonix code {root_path}",
@@ -173,14 +192,128 @@ def write_reasonix_launcher(hippo_dir: str | Path) -> Path:
         "$ProjectRoot = Split-Path -Parent $PSScriptRoot\n"
         "$SpecPath = Join-Path $PSScriptRoot 'reasonix-mcp-spec.txt'\n"
         "$Spec = (Get-Content -Raw -Path $SpecPath).Trim()\n"
+        "$ContextPath = Join-Path $PSScriptRoot 'reasonix-system-append.md'\n"
+        "$StatusPath = Join-Path $PSScriptRoot 'reasonix-status.json'\n"
+        "hippo reasonix-bootstrap-context --root $ProjectRoot --output $ContextPath "
+        "--status-output $StatusPath | Out-Null\n"
+        "if (Test-Path -LiteralPath $StatusPath) { "
+        "$env:HIPPO_REASONIX_STATUS_FILE = $StatusPath }\n"
         "Set-Location $ProjectRoot\n"
-        "$Args = @('code', '.', '--mcp', $Spec)\n"
+        "$Args = @('code', '.', '--mcp', $Spec, '--system-append-file', $ContextPath)\n"
         "if ($Resume) { $Args += '--resume' }\n"
         "if ($Model) { $Args += @('--model', $Model) }\n"
         "reasonix @Args\n"
     )
     path.write_text(script, encoding="utf-8")
     return path
+
+
+def write_reasonix_bootstrap_context(
+    root: str | Path = ".",
+    output: str | Path | None = None,
+    *,
+    intent: str = "project overview and coding session bootstrap",
+    status_output: str | Path | None = None,
+) -> Path:
+    root_path = Path(root).expanduser().resolve()
+    output_path = (
+        Path(output).expanduser()
+        if output
+        else root_path / HIPPO_DIR_NAME / "reasonix-system-append.md"
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    project = resolve_project_name(cwd=root_path)
+    token_savings: dict[str, Any] | None = None
+    try:
+        from hippocampus_memory.recall_policy import build_auto_context
+
+        payload = build_auto_context(
+            project_mcp_database(root_path),
+            intent=intent,
+            project=project,
+            session_key="reasonix-bootstrap",
+            track_token_savings=True,
+            include_savings_in_text=True,
+        )
+        body = str(payload["text"])
+        if isinstance(payload.get("token_savings"), dict):
+            token_savings = payload["token_savings"]
+    except Exception as exc:  # pragma: no cover - defensive launcher fallback
+        body = f"Hippocampus bootstrap context unavailable: {exc}"
+    text = (
+        "Hippocampus Memory bootstrap for Reasonix.\n"
+        "Use the context below before reading project files.\n"
+        "If a token savings line is present, include it visibly in the final user-facing "
+        "Reasonix UI reply.\n\n"
+        f"{body}\n"
+    )
+    output_path.write_text(text, encoding="utf-8")
+    if status_output:
+        write_reasonix_status_file(
+            status_output,
+            token_savings,
+            project=project,
+            root=root_path,
+        )
+    return output_path
+
+
+def write_reasonix_status_file(
+    output: str | Path,
+    token_savings: dict[str, Any] | None,
+    *,
+    project: str | None = None,
+    root: str | Path | None = None,
+) -> Path:
+    path = Path(output).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    run_id = f"{path.stem}-{os.getpid()}-{int(time.time() * 1000)}"
+    session_ledger_dir = reasonix_session_savings_dir(root) if root is not None else None
+    if not token_savings:
+        path.write_text(
+            json.dumps(
+                {
+                    "available": False,
+                    "run_id": run_id,
+                    "project": project,
+                    "session_ledger_dir": (
+                        str(session_ledger_dir) if session_ledger_dir else None
+                    ),
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return path
+    saved_tokens = int(token_savings.get("saved_tokens") or 0)
+    project_total_saved = int(token_savings.get("total_saved_tokens") or 0)
+    payload = {
+        "available": True,
+        "scope": "reasonix_session",
+        "run_id": run_id,
+        "project": project,
+        "session_ledger_dir": str(session_ledger_dir) if session_ledger_dir else None,
+        "saved_tokens": saved_tokens,
+        "session_saved_tokens": 0,
+        "total_saved_tokens": 0,
+        "project_total_saved_tokens": project_total_saved,
+        "baseline_tokens": int(token_savings.get("baseline_tokens") or 0),
+        "output_tokens": int(token_savings.get("output_tokens") or 0),
+        "savings_ratio": float(token_savings.get("savings_ratio") or 0.0),
+        "average_savings_ratio": float(token_savings.get("average_savings_ratio") or 0.0),
+        "text": token_savings.get("token_savings_text") or "",
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def reasonix_session_savings_dir(root: str | Path = ".") -> Path:
+    project_root = find_project_root(root)
+    if project_root is not None:
+        return project_root / HIPPO_DIR_NAME / "reasonix-session-savings"
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    base = Path(local_appdata) if local_appdata else Path.home() / "AppData" / "Local"
+    return base / "hippo_memory" / "reasonix-session-savings"
 
 
 def ensure_reasonix_project_memory(root: str | Path, project: str) -> tuple[Path, bool]:
@@ -204,19 +337,63 @@ def reasonix_project_memory_block(project: str) -> str:
         f"{HIPPO_MEMORY_START}\n"
         "## Hippocampus Memory\n\n"
         f"- This project is deployed with project-local hippocampus-memory as `{project}`.\n"
-        "- The MCP server name is `hippo_memory`; prefer its tools when external project "
-        "memory, impact analysis, or compact context would help.\n"
-        "- At the start of non-trivial coding/debugging/architecture tasks, decide whether "
-        "to call `hippo_memory_context_callback` with the current task intent. Use "
-        "`session_key=\"reasonix\"` unless the user gives a better session name.\n"
-        "- For broad orientation use `hippo_memory_context_bundle`; before risky edits use "
-        "`hippo_memory_project_impact`; for symbol questions use `hippo_memory_code_symbols` "
-        "or `hippo_memory_code_references`.\n"
-        "- Do not write long-term memories unless the user explicitly asks. Prefer queued "
-        "candidates or ask before storing uncertain facts. Do not recall private/sensitive "
-        "memories unless explicitly requested.\n"
+        "- The MCP server name is `hippo_memory`; prefer its automatic tools when external "
+        "project memory, impact analysis, or compact context would help.\n"
+        "- At the start of non-trivial coding/debugging/architecture tasks, call "
+        "`hippo_memory_context_auto` with the current task intent. Use "
+        "`session_key=\"reasonix\"` unless the user gives a better session name. Trust the "
+        "tool when it returns that no external memory is needed.\n"
+        "- When `hippo_memory_context_auto` returns `token_savings_text`, or its text says "
+        "`Show this token savings line to the user:`, include that token savings line in "
+        "the final user-facing Reasonix UI reply. Do not leave it hidden in tool output "
+        "or reasoning only.\n"
+        "- For direct symbol questions use `hippo_memory_code_symbols` or "
+        "`hippo_memory_code_references`; otherwise prefer `hippo_memory_context_auto` over "
+        "manually choosing profile, impact, callback, or bundle tools.\n"
+        "- Near the end of a meaningful session, call `hippo_memory_memory_auto_store` with "
+        "a concise transcript summary. It will write high-confidence non-sensitive memories, "
+        "queue uncertain memories, and skip low-value content.\n"
+        "- Do not recall private/sensitive memories unless explicitly requested. Do not force "
+        "long-term writes for sensitive or uncertain facts.\n"
         "- Keep recalled context short, cite files when making code claims, make minimal "
         "changes, and run relevant tests.\n"
+        f"{HIPPO_MEMORY_END}\n"
+    )
+
+
+def ensure_reasonix_global_memory(reasonix_dir: str | Path | None = None) -> tuple[Path, bool]:
+    target = (
+        Path(reasonix_dir).expanduser()
+        if reasonix_dir
+        else default_reasonix_config_path().parent
+    )
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / "REASONIX.md"
+    old = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
+    new = _upsert_marked_block(old, reasonix_global_memory_block())
+    if new == old:
+        return path, False
+    path.write_text(new, encoding="utf-8")
+    return path, True
+
+
+def reasonix_global_memory_block() -> str:
+    return (
+        f"{HIPPO_MEMORY_START}\n"
+        "## Hippocampus Memory\n\n"
+        "- A global Reasonix MCP server named `hippo_memory` is installed for automatic "
+        "external memory and compact context.\n"
+        "- At the start of non-trivial coding/debugging/project-review/architecture tasks, "
+        "call `hippo_memory_context_auto` before reading lots of files. Pass the current "
+        "task intent and the project name when you can infer it; otherwise omit `project` "
+        "and let the MCP server use its default project.\n"
+        "- When `hippo_memory_context_auto` returns `token_savings_text`, or its text says "
+        "`Show this token savings line to the user:`, include that token savings line in "
+        "the final user-facing Reasonix UI reply.\n"
+        "- Near the end of meaningful work, call `hippo_memory_memory_auto_store` with a "
+        "concise transcript summary so durable, non-sensitive facts can be written or queued.\n"
+        "- Do not recall private/sensitive memories unless explicitly requested. Do not force "
+        "long-term writes for sensitive or uncertain facts.\n"
         f"{HIPPO_MEMORY_END}\n"
     )
 
@@ -237,7 +414,15 @@ def _upsert_marked_block(text: str, block: str) -> str:
         suffix = text[end:]
         if suffix.startswith("\n"):
             suffix = suffix[1:]
-        return text[:start].rstrip() + "\n\n" + block.rstrip() + "\n\n" + suffix.lstrip()
+        prefix = text[:start].rstrip()
+        replacement = block.rstrip()
+        if prefix:
+            replacement = prefix + "\n\n" + replacement
+        if suffix.strip():
+            replacement += "\n\n" + suffix.lstrip()
+        else:
+            replacement += "\n"
+        return replacement
     if not text.strip():
         return block
     return text.rstrip() + "\n\n" + block
@@ -282,18 +467,387 @@ def install_reasonix_mcp_spec(
     return True
 
 
+def default_reasonix_bin_dir() -> Path:
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        return Path(appdata) / "npm"
+    return Path.home() / "AppData" / "Roaming" / "npm"
+
+
+def install_reasonix_command_shims(bin_dir: str | Path | None = None) -> dict[str, Any]:
+    target = Path(bin_dir).expanduser() if bin_dir else default_reasonix_bin_dir()
+    target.mkdir(parents=True, exist_ok=True)
+    ps1_path = target / "reasonix.ps1"
+    cmd_path = target / "reasonix.cmd"
+    ps1_updated = _write_reasonix_shim_file(ps1_path, _reasonix_ps1_shim())
+    cmd_updated = _write_reasonix_shim_file(cmd_path, _reasonix_cmd_shim())
+    status_bar_patch = patch_reasonix_status_bar(target)
+    return {
+        "bin_dir": str(target),
+        "ps1": str(ps1_path),
+        "cmd": str(cmd_path),
+        "ps1_updated": ps1_updated,
+        "cmd_updated": cmd_updated,
+        "status_bar_patch": status_bar_patch,
+    }
+
+
+def patch_reasonix_status_bar(bin_dir: str | Path | None = None) -> dict[str, Any]:
+    """Patch the installed Reasonix TUI status row to show Hippo savings.
+
+    Reasonix exposes token/cost data only inside its bundled Ink UI. The Hippo
+    shim writes a tiny JSON status file, and this patch teaches the UI to read
+    that file and render one extra status-bar pill.
+    """
+    target = Path(bin_dir).expanduser() if bin_dir else default_reasonix_bin_dir()
+    cli_dir = target / "node_modules" / "reasonix" / "dist" / "cli"
+    if not cli_dir.exists():
+        return {
+            "bin_dir": str(target),
+            "patched": False,
+            "reason": "reasonix_cli_dir_not_found",
+        }
+    candidates = sorted(cli_dir.glob("chunk-*.js"))
+    for candidate in candidates:
+        old = candidate.read_text(encoding="utf-8", errors="ignore")
+        if (
+            "function StatusRow({" in old
+            and "statusBar.showCtxUsage" in old
+            and "formatTokens" in old
+        ):
+            return _patch_reasonix_status_bar_file(candidate, old)
+    return {
+        "bin_dir": str(target),
+        "patched": False,
+        "reason": "status_bar_chunk_not_found",
+    }
+
+
+def _patch_reasonix_status_bar_file(path: Path, old: str) -> dict[str, Any]:
+    backup = path.with_suffix(path.suffix + ".hippo-status-original")
+    if f"{REASONIX_STATUS_PATCH_MARKER} {REASONIX_STATUS_PATCH_VERSION}" in old:
+        return {
+            "status_bar_file": str(path),
+            "patched": False,
+            "reason": "already_patched",
+        }
+    if REASONIX_STATUS_PATCH_MARKER in old:
+        if not backup.exists():
+            return {
+                "status_bar_file": str(path),
+                "patched": False,
+                "reason": "patched_source_backup_missing",
+            }
+        old = backup.read_text(encoding="utf-8", errors="ignore")
+    react_match = re.search(
+        r"function Pill\(\{ children \}\) \{\s+return /\* @__PURE__ \*/ "
+        r"(import_react\d+)\.default\.createElement",
+        old,
+    )
+    react_name = react_match.group(1) if react_match else "import_react16"
+    helper = _reasonix_status_bar_patch_helper(react_name)
+    status_anchor = "function StatusRow({\n"
+    if status_anchor not in old:
+        return {
+            "status_bar_file": str(path),
+            "patched": False,
+            "reason": "status_row_anchor_not_found",
+        }
+    new = old.replace(status_anchor, helper + "\n" + status_anchor, 1)
+    cache_anchor = (
+        '`${t("statusBar.cache")} ${Math.round(status2.cacheHit * 100)}%`))), '
+        "statusBar.showCtxUsage"
+    )
+    if cache_anchor not in new:
+        return {
+            "status_bar_file": str(path),
+            "patched": False,
+            "reason": "cache_context_anchor_not_found",
+        }
+    new = new.replace(
+        cache_anchor,
+        cache_anchor.replace(
+            "statusBar.showCtxUsage",
+            f"{react_name}.default.createElement("
+            "HippoSavingsPill, { "
+            "sessionId: session.id, "
+            "promptTokens: status2.promptTokens, "
+            "turnCost: status2.cost "
+            "}), "
+            "statusBar.showCtxUsage",
+        ),
+        1,
+    )
+    if not backup.exists():
+        backup.write_text(old, encoding="utf-8")
+    path.write_text(new, encoding="utf-8")
+    return {
+        "status_bar_file": str(path),
+        "backup": str(backup),
+        "patched": True,
+    }
+
+
+def _reasonix_status_bar_patch_helper(react_name: str) -> str:
+    return f"""// {REASONIX_STATUS_PATCH_MARKER} {REASONIX_STATUS_PATCH_VERSION}
+function hippoSafeSessionFileName(value) {{
+  const raw = String(value || "unknown");
+  const safe = raw.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 160);
+  return safe || "unknown";
+}}
+function readHippoJsonFile(fs, file) {{
+  if (!file || !fs.existsSync(file)) return null;
+  return JSON.parse(fs.readFileSync(file, "utf8"));
+}}
+function writeHippoJsonFile(fs, file, data) {{
+  fs.writeFileSync(file, JSON.stringify(data), "utf8");
+}}
+function readHippoReasonixStatus(sessionId, promptTokens, turnCost) {{
+  try {{
+    const file = process.env.HIPPO_REASONIX_STATUS_FILE;
+    if (!file) return null;
+    const requireFn = globalThis.require;
+    if (!requireFn) return null;
+    const fs = requireFn("fs");
+    const path = requireFn("path");
+    const data = readHippoJsonFile(fs, file);
+    if (!data || !data.available) return null;
+    const run = Number(data.saved_tokens || 0);
+    if (!Number.isFinite(run)) return null;
+    let sessionTotal = 0;
+    let lastSaved = 0;
+    let turnCount = 0;
+    const sessionKey = sessionId ? hippoSafeSessionFileName(sessionId) : null;
+    const ledgerDir = data.session_ledger_dir;
+    if (sessionKey && ledgerDir) {{
+      fs.mkdirSync(ledgerDir, {{ recursive: true }});
+      const ledgerFile = path.join(ledgerDir, `${{sessionKey}}.json`);
+      const existing = readHippoJsonFile(fs, ledgerFile) || {{}};
+      const turnTokenCount = Number(promptTokens || 0);
+      const turnCostValue = Number(turnCost || 0);
+      const hasRealTurn = Number.isFinite(turnTokenCount)
+        && turnTokenCount > 0
+        && Number.isFinite(turnCostValue)
+        && turnCostValue > 0;
+      const turnKey = hasRealTurn
+        ? `prompt:${{Math.round(turnTokenCount)}}:cost:${{Math.round(turnCostValue * 1e6)}}`
+        : "";
+      const trackingMode = "reasonix_cost_turns_v2";
+      const currentLedger = existing.tracking_mode === trackingMode;
+      const turnKeys = currentLedger && Array.isArray(existing.turn_keys)
+        ? existing.turn_keys
+        : [];
+      const runs = currentLedger && Array.isArray(existing.runs) ? existing.runs : [];
+      const ledger = {{
+        ...(currentLedger ? existing : {{
+          legacy_tracking_mode: existing.tracking_mode || null,
+          legacy_saved_tokens: Number(existing.saved_tokens || 0)
+        }}),
+        project: data.project || existing.project || null,
+        session_id: sessionId,
+        saved_tokens: currentLedger ? Number(existing.saved_tokens || 0) : 0,
+        baseline_tokens: currentLedger ? Number(existing.baseline_tokens || 0) : 0,
+        output_tokens: currentLedger ? Number(existing.output_tokens || 0) : 0,
+        last_saved_tokens: currentLedger ? Number(existing.last_saved_tokens || 0) : 0,
+        turn_count: currentLedger ? Number(existing.turn_count || 0) : 0,
+        runs,
+        turn_keys: turnKeys,
+        tracking_mode: trackingMode
+      }};
+      if (turnKey && !ledger.turn_keys.includes(turnKey)) {{
+        ledger.turn_keys = [...ledger.turn_keys, turnKey];
+        ledger.runs = [...ledger.runs, String(data.run_id || file)];
+        ledger.saved_tokens += run;
+        ledger.baseline_tokens += Number(data.baseline_tokens || 0);
+        ledger.output_tokens += Number(data.output_tokens || 0);
+        ledger.last_saved_tokens = run;
+        ledger.last_turn_key = turnKey;
+        ledger.turn_count += 1;
+        ledger.updated_at = new Date().toISOString();
+        writeHippoJsonFile(fs, ledgerFile, ledger);
+      }}
+      sessionTotal = Number(ledger.saved_tokens || 0);
+      lastSaved = Number(ledger.last_saved_tokens || 0);
+      turnCount = Number(ledger.turn_count || 0);
+    }}
+    if (!Number.isFinite(sessionTotal)) sessionTotal = 0;
+    if (!Number.isFinite(lastSaved)) lastSaved = 0;
+    if (!Number.isFinite(turnCount)) turnCount = 0;
+    return {{ run: lastSaved, sessionTotal, turnCount }};
+  }} catch {{
+    return null;
+  }}
+}}
+function HippoSavingsPill({{ sessionId, promptTokens, turnCost }}) {{
+  const data = readHippoReasonixStatus(sessionId, promptTokens, turnCost);
+  if (!data) return null;
+  return /* @__PURE__ */ {react_name}.default.createElement(
+    {react_name}.default.Fragment,
+    null,
+    /* @__PURE__ */ {react_name}.default.createElement(Gap, null),
+    /* @__PURE__ */ {react_name}.default.createElement(
+      Pill,
+      null,
+      /* @__PURE__ */ {react_name}.default.createElement(
+        Text,
+        {{ color: TONE.ok, wrap: "truncate" }},
+        "节省 本轮"
+      ),
+      /* @__PURE__ */ {react_name}.default.createElement(
+        Text,
+        {{ bold: true, color: TONE.ok, wrap: "truncate" }},
+        formatTokens(data.run)
+      ),
+      /* @__PURE__ */ {react_name}.default.createElement(
+        Text,
+        {{ color: FG.faint, wrap: "truncate" }},
+        ` / 会话${{formatTokens(data.sessionTotal)}}`
+      )
+    )
+  );
+}}"""
+
+
+def _write_reasonix_shim_file(path: Path, content: str) -> bool:
+    old = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
+    if old == content:
+        return False
+    backup = path.with_suffix(path.suffix + ".hippo-original")
+    if old and REASONIX_SHIM_MARKER not in old and not backup.exists():
+        backup.write_text(old, encoding="utf-8")
+    path.write_text(content, encoding="utf-8")
+    return True
+
+
+def _reasonix_cmd_shim() -> str:
+    return (
+        "@ECHO off\n"
+        f"REM {REASONIX_SHIM_MARKER} v1\n"
+        'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0reasonix.ps1" %*\n'
+    )
+
+
+def _reasonix_ps1_shim() -> str:
+    return f"""#!/usr/bin/env pwsh
+# {REASONIX_SHIM_MARKER} v1
+$basedir = Split-Path $MyInvocation.MyCommand.Definition -Parent
+$exe = ""
+if ($PSVersionTable.PSVersion -lt "6.0" -or $IsWindows) {{
+  $exe = ".exe"
+}}
+if (Test-Path "$basedir/node$exe") {{
+  $node = "$basedir/node$exe"
+}} else {{
+  $node = "node$exe"
+}}
+$reasonixIndex = Join-Path $basedir "node_modules/reasonix/dist/cli/index.js"
+
+function Invoke-ReasonixOriginal([string[]]$ArgList) {{
+  if ($MyInvocation.ExpectingInput) {{
+    $input | & $node $reasonixIndex @ArgList
+  }} else {{
+    & $node $reasonixIndex @ArgList
+  }}
+  exit $LASTEXITCODE
+}}
+
+function Test-HasSystemAppend([string[]]$ArgList) {{
+  foreach ($item in $ArgList) {{
+    if ($item -eq "--system-append" -or $item -eq "--system-append-file") {{
+      return $true
+    }}
+  }}
+  return $false
+}}
+
+function Test-IsBareCodeFlag([string]$Item) {{
+  return $Item -eq "-c" -or $Item -eq "--continue" -or
+    $Item -eq "--no-mouse" -or $Item -eq "--no-proxy"
+}}
+
+function Test-ShouldInject([string[]]$ArgList) {{
+  if ($ArgList.Count -eq 0) {{ return $true }}
+  if ($ArgList[0] -eq "code") {{ return $true }}
+  if ($ArgList[0].StartsWith("-")) {{
+    foreach ($item in $ArgList) {{
+      if (-not (Test-IsBareCodeFlag $item)) {{ return $false }}
+    }}
+    return $true
+  }}
+  return $false
+}}
+
+function Convert-ToCodeArgs([string[]]$ArgList) {{
+  if ($ArgList.Count -eq 0) {{ return @("code", ".") }}
+  if ($ArgList[0] -eq "code") {{ return $ArgList }}
+  $out = @("code", ".")
+  foreach ($item in $ArgList) {{
+    if ($item -eq "-c" -or $item -eq "--continue") {{
+      $out += "--resume"
+    }} else {{
+      $out += $item
+    }}
+  }}
+  return $out
+}}
+
+function Get-CodeRoot([string[]]$ArgList) {{
+  if ($ArgList.Count -ge 2 -and $ArgList[0] -eq "code" -and -not $ArgList[1].StartsWith("-")) {{
+    try {{
+      return (Resolve-Path -LiteralPath $ArgList[1]).Path
+    }} catch {{
+      return $ArgList[1]
+    }}
+  }}
+  return (Get-Location).Path
+}}
+
+$argList = @($args)
+if (Test-ShouldInject $argList) {{
+  $argList = Convert-ToCodeArgs $argList
+  if (-not (Test-HasSystemAppend $argList)) {{
+    $root = Get-CodeRoot $argList
+    $contextDir = Join-Path ([System.IO.Path]::GetTempPath()) "hippo-reasonix"
+    New-Item -ItemType Directory -Force -Path $contextDir | Out-Null
+    $contextPath = Join-Path $contextDir ("system-append-" + $PID + ".md")
+    $statusPath = Join-Path $contextDir ("status-" + $PID + ".json")
+    try {{
+      $bootstrapArgs = @(
+        "reasonix-bootstrap-context",
+        "--root",
+        $root,
+        "--output",
+        $contextPath,
+        "--status-output",
+        $statusPath
+      )
+      & hippo @bootstrapArgs *> $null
+    }} catch {{
+    }}
+    if (Test-Path -LiteralPath $statusPath) {{
+      $env:HIPPO_REASONIX_STATUS_FILE = $statusPath
+    }}
+    if (Test-Path -LiteralPath $contextPath) {{
+      $argList += @("--system-append-file", $contextPath)
+    }}
+  }}
+}}
+
+Invoke-ReasonixOriginal $argList
+"""
+
+
 def project_mcp_database(root: str | Path = ".") -> Database:
     project_root = find_project_root(root)
     if project_root is None:
-        raise FileNotFoundError(
-            "No .hippo project found. Run `hippo reasonix-deploy` in this project first."
-        )
+        db = Database()
+        db.initialize()
+        return db
     db_path = project_root / HIPPO_DIR_NAME / HIPPO_DB_NAME
     if not db_path.exists():
-        raise FileNotFoundError(
-            f"Project memory database not found: {db_path}. "
-            "Run `hippo reasonix-deploy` in this project first."
-        )
+        db = Database()
+        db.initialize()
+        return db
     db = Database(db_path)
     db.initialize()
     return db

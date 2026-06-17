@@ -15,18 +15,23 @@ from hippocampus_memory.context_bundle import ContextBundleBuilder
 from hippocampus_memory.db import Database
 from hippocampus_memory.deploy import (
     deploy_reasonix,
+    install_reasonix_command_shims,
+    patch_reasonix_status_bar,
     project_mcp_database,
     write_daemon_script,
     write_mcp_client_config,
+    write_reasonix_bootstrap_context,
 )
 from hippocampus_memory.evaluator import evaluate_retrieval
 from hippocampus_memory.lsp_diagnostics import run_python_diagnostics
 from hippocampus_memory.mcp_server import serve_stdio
+from hippocampus_memory.memory_policy import auto_store_memories
 from hippocampus_memory.memory_writer import MemoryWriter
 from hippocampus_memory.packer import MemoryPacker
 from hippocampus_memory.project_indexer import ProjectIndexer
 from hippocampus_memory.project_profile import ProjectProfileBuilder
 from hippocampus_memory.project_resolver import resolve_project_name, write_project_config
+from hippocampus_memory.recall_policy import build_auto_context
 from hippocampus_memory.report import write_memory_browser
 from hippocampus_memory.retriever import Retriever
 from hippocampus_memory.runner import run_with_context
@@ -38,7 +43,12 @@ from hippocampus_memory.session_ingestor import (
 )
 from hippocampus_memory.session_recorder import record_run_session
 from hippocampus_memory.summarizer import summarize_session_file
-from hippocampus_memory.token_report import token_ledger_report, token_savings_report
+from hippocampus_memory.token_report import (
+    format_savings_line,
+    record_context_savings,
+    token_ledger_report,
+    token_savings_report,
+)
 
 app = typer.Typer(help="Local-first external memory for AI agents.")
 
@@ -146,20 +156,100 @@ def pack(
     compact: bool = typer.Option(False, "--compact"),
     exclude_memory_id: list[str] = typer.Option([], "--exclude-memory-id"),
     session_dedupe: bool = typer.Option(False, "--session-dedupe"),
+    token_stats: bool = typer.Option(True, "--token-stats/--no-token-stats"),
+    token_model: str | None = typer.Option(None, "--token-model"),
 ) -> None:
     """Generate a Memory Pack for an agent."""
     project = resolve_project_name(project)
+    db = get_db()
+    text = MemoryPacker(db).pack(
+        query=query,
+        project=project,
+        max_tokens=max_tokens,
+        source_chunk_limit=source_chunk_limit,
+        compact=compact,
+        exclude_memory_ids=exclude_memory_id or None,
+        session_dedupe=session_dedupe,
+    )
+    _echo_token_savings(
+        db,
+        project=project,
+        intent=query,
+        context_type="compact_pack" if compact else "memory_pack",
+        output_text=text,
+        enabled=token_stats,
+        model=token_model,
+    )
+    typer.echo(text)
+
+
+@app.command("auto-store")
+def auto_store(
+    text: str | None = typer.Option(None, "--text", "-t"),
+    path: Path | None = typer.Option(None, "--path", "-p"),
+    project: str | None = typer.Option(None, "--project"),
+    source: str = typer.Option("auto_store", "--source"),
+    mode: str = typer.Option("auto", "--mode", help="One of: auto, write, queue, preview."),
+    max_candidates: int = typer.Option(12, "--max-candidates"),
+    allow_sensitive: bool = typer.Option(False, "--allow-sensitive"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+) -> None:
+    """Automatically admit useful long-term memories from text."""
+    if path is not None:
+        raw_text = path.read_text(encoding="utf-8", errors="ignore")
+    elif text is not None:
+        raw_text = text
+    else:
+        raise typer.BadParameter("--text or --path is required")
+    resolved = resolve_project_name(project) if project is not None else None
     typer.echo(
-        MemoryPacker(get_db()).pack(
-            query=query,
-            project=project,
-            max_tokens=max_tokens,
-            source_chunk_limit=source_chunk_limit,
-            compact=compact,
-            exclude_memory_ids=exclude_memory_id or None,
-            session_dedupe=session_dedupe,
+        auto_store_memories(
+            get_db(),
+            raw_text,
+            project=resolved,
+            source=source,
+            mode=mode,
+            max_candidates=max_candidates,
+            allow_sensitive=allow_sensitive,
+            dry_run=dry_run,
         )
     )
+
+
+@app.command("auto-context")
+def auto_context(
+    intent: str,
+    project: str | None = typer.Option(None, "--project"),
+    session: str = typer.Option("default", "--session"),
+    max_tokens: int = typer.Option(3500, "--max-tokens"),
+    include_code_map: bool = typer.Option(True, "--code-map/--no-code-map"),
+    metadata: bool = typer.Option(False, "--metadata"),
+    token_stats: bool = typer.Option(True, "--token-stats/--no-token-stats"),
+    token_model: str | None = typer.Option(None, "--token-model"),
+) -> None:
+    """Automatically decide whether and how to recall external memory."""
+    resolved = resolve_project_name(project) if project is not None else None
+    db = get_db()
+    result = build_auto_context(
+        db,
+        intent=intent,
+        project=resolved,
+        session_key=session,
+        max_tokens=max_tokens,
+        include_code_map=include_code_map,
+    )
+    token_report = _echo_token_savings(
+        db,
+        project=resolved,
+        intent=intent,
+        context_type=str(result["decision"]["action"]),
+        output_text=str(result["text"]),
+        enabled=token_stats and resolved is not None and result["decision"]["action"] != "none",
+        model=token_model,
+    )
+    if token_report is not None:
+        result["token_savings"] = token_report
+    typer.echo(result if metadata else result["text"])
 
 
 @app.command()
@@ -324,6 +414,8 @@ def run(
     record: bool = typer.Option(True, "--record/--no-record"),
     write_session_memory: bool = typer.Option(False, "--write-session-memory"),
     yes: bool = typer.Option(False, "--yes"),
+    token_stats: bool = typer.Option(True, "--token-stats/--no-token-stats"),
+    token_model: str | None = typer.Option(None, "--token-model"),
 ) -> None:
     """Generate context and optionally launch another AI coding command with it."""
     db = get_db()
@@ -334,6 +426,15 @@ def run(
         max_tokens=max_tokens,
         include_code_map=include_code_map,
         strategy=bundle_strategy,
+    )
+    _echo_token_savings(
+        db,
+        project=project_name,
+        intent=intent,
+        context_type=f"context_bundle:{bundle_strategy}",
+        output_text=context,
+        enabled=token_stats,
+        model=token_model,
     )
     try:
         result = run_with_context(
@@ -377,7 +478,11 @@ def mcp() -> None:
 @app.command("mcp-project")
 def mcp_project(root: Path = typer.Option(Path("."), "--root")) -> None:
     """Run MCP against the nearest project-local .hippo/hippo.db."""
-    serve_stdio(project_mcp_database(root), safe_tool_names=True)
+    serve_stdio(
+        project_mcp_database(root),
+        safe_tool_names=True,
+        default_project=resolve_project_name(cwd=root),
+    )
 
 
 @app.command("reasonix-deploy")
@@ -410,6 +515,40 @@ def reasonix_deploy(
             project_memory=project_memory,
         )
     )
+
+
+@app.command("reasonix-bootstrap-context")
+def reasonix_bootstrap_context(
+    root: Path = typer.Option(Path("."), "--root"),
+    output: Path = typer.Option(..., "--output"),
+    status_output: Path | None = typer.Option(None, "--status-output"),
+    intent: str = typer.Option(
+        "project overview and coding session bootstrap",
+        "--intent",
+    ),
+) -> None:
+    """Write the system-append context used by the Reasonix command shim."""
+    path = write_reasonix_bootstrap_context(
+        root=root,
+        output=output,
+        intent=intent,
+        status_output=status_output,
+    )
+    typer.echo({"context_file": str(path)})
+
+
+@app.command("reasonix-install-shim")
+def reasonix_install_shim(bin_dir: Path | None = typer.Option(None, "--bin-dir")) -> None:
+    """Install the global Reasonix command shim that injects Hippo context."""
+    typer.echo(install_reasonix_command_shims(bin_dir))
+
+
+@app.command("reasonix-patch-status-bar")
+def reasonix_patch_status_bar(
+    bin_dir: Path | None = typer.Option(None, "--bin-dir"),
+) -> None:
+    """Patch the installed Reasonix TUI to show Hippo token savings."""
+    typer.echo(patch_reasonix_status_bar(bin_dir))
 
 
 @app.command("eval")
@@ -617,3 +756,28 @@ def _project_root_path(db: Database, project: str) -> Path | None:
     if not record or not record.get("root_path"):
         return None
     return Path(str(record["root_path"]))
+
+
+def _echo_token_savings(
+    db: Database,
+    *,
+    project: str | None,
+    intent: str,
+    context_type: str,
+    output_text: str,
+    enabled: bool,
+    model: str | None,
+) -> dict[str, object] | None:
+    if not enabled or not project:
+        return None
+    report = record_context_savings(
+        db,
+        project=project,
+        intent=intent,
+        context_type=context_type,
+        output_text=output_text,
+        model=model,
+        record=True,
+    )
+    typer.echo(format_savings_line(report), err=True)
+    return report

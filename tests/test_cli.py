@@ -221,6 +221,83 @@ def test_cli_token_ledger_is_project_scoped(tmp_path, monkeypatch):
     assert "alpha" in ledger.output
 
 
+def test_cli_pack_prints_run_and_total_token_savings(tmp_path, monkeypatch):
+    monkeypatch.setenv("HIPPO_DB_PATH", str(tmp_path / "pack-token-stats.db"))
+    runner = CliRunner()
+
+    relevant = runner.invoke(
+        app,
+        [
+            "write",
+            "--project",
+            "alpha",
+            "--type",
+            "task_state",
+            "--content",
+            "Current task is to show token savings in the CLI.",
+        ],
+    )
+    assert relevant.exit_code == 0
+    for index in range(8):
+        filler = runner.invoke(
+            app,
+            [
+                "write",
+                "--project",
+                "alpha",
+                "--type",
+                "technical_fact",
+                "--content",
+                (
+                    f"Background note {index}: "
+                    "this long unrelated implementation context is kept only "
+                    "to make the naive baseline larger than the focused pack. "
+                    "It should not be recalled for the token savings query. "
+                ),
+            ],
+        )
+        assert filler.exit_code == 0
+
+    pack = runner.invoke(app, ["pack", "token savings CLI", "--project", "alpha"])
+    assert pack.exit_code == 0
+    assert "Token savings:" in pack.output
+    assert "this run saved" in pack.output
+    assert "project total saved" in pack.output
+    assert "Memory Pack:" in pack.output
+
+    ledger = runner.invoke(app, ["token-ledger", "--project", "alpha"])
+    assert ledger.exit_code == 0
+    assert "'entry_count': 1" in ledger.output
+    assert "'saved_tokens':" in ledger.output
+
+
+def test_cli_auto_context_metadata_includes_token_savings(tmp_path, monkeypatch):
+    monkeypatch.setenv("HIPPO_DB_PATH", str(tmp_path / "auto-context-token-stats.db"))
+    runner = CliRunner()
+    runner.invoke(
+        app,
+        [
+            "write",
+            "--project",
+            "alpha",
+            "--type",
+            "task_state",
+            "--content",
+            "Current task is to continue the automatic context scheduler.",
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        ["auto-context", "continue", "--project", "alpha", "--metadata"],
+    )
+
+    assert result.exit_code == 0
+    assert "Token savings:" in result.output
+    assert "'token_savings':" in result.output
+    assert "'total_saved_tokens':" in result.output
+
+
 def test_cli_callback_tracks_seen_memory_ids(tmp_path, monkeypatch):
     monkeypatch.setenv("HIPPO_DB_PATH", str(tmp_path / "callback.db"))
     runner = CliRunner()

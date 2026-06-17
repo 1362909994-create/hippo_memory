@@ -58,6 +58,7 @@ def accept_candidate(db: Database, candidate_id: str) -> dict[str, Any]:
         raise ValueError(f"candidate not found: {candidate_id}")
     if candidate["status"] != "pending":
         raise ValueError(f"candidate is not pending: {candidate_id}")
+    metadata = loads_json(candidate.get("metadata"), {})
     result = MemoryWriter(db).write(
         project=candidate["project"],
         content=candidate["content"],
@@ -65,7 +66,11 @@ def accept_candidate(db: Database, candidate_id: str) -> dict[str, Any]:
         confidence=float(candidate["confidence"]),
         importance=float(candidate["importance"]),
         source=candidate["source"],
-        metadata=loads_json(candidate.get("metadata"), {}),
+        entities=_list_metadata(metadata.get("entities")),
+        tags=_list_metadata(metadata.get("tags")),
+        visibility=metadata.get("visibility"),
+        ttl_days=metadata.get("ttl_days"),
+        metadata=metadata,
     )
     db.update_candidate_status(candidate_id, "accepted")
     return {"memory_id": result.memory_id, "created": result.created}
@@ -73,3 +78,9 @@ def accept_candidate(db: Database, candidate_id: str) -> dict[str, Any]:
 
 def discard_candidate(db: Database, candidate_id: str) -> bool:
     return db.update_candidate_status(candidate_id, "discarded")
+
+
+def _list_metadata(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value]
