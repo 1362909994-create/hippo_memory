@@ -22,7 +22,7 @@ REASONIX_SERVER_NAME = "hippo_memory"
 REASONIX_PROJECT_SPEC = f"{REASONIX_SERVER_NAME}=hippo mcp-project"
 REASONIX_SHIM_MARKER = "HIPPO_MEMORY_REASONIX_SHIM"
 REASONIX_STATUS_PATCH_MARKER = "HIPPO_REASONIX_STATUS_BAR_PATCH"
-REASONIX_STATUS_PATCH_VERSION = "v9"
+REASONIX_STATUS_PATCH_VERSION = "v11"
 REASONIX_MEMORY_FILES = (
     "REASONIX.md",
     ".claude/CLAUDE.md",
@@ -686,7 +686,8 @@ def _patch_reasonix_status_bar_file(path: Path, old: str) -> dict[str, Any]:
             "sessionId: session.id, "
             "promptTokens: status2.promptTokens, "
             "turnCost: status2.cost, "
-            "workspace: session.workspace "
+            "workspace: session.workspace, "
+            "hasTurn: hasTurn "
             "}), "
             "statusBar.showCtxUsage",
         ),
@@ -764,7 +765,7 @@ function refreshHippoReasonixStatusForWorkspace(requireFn, fs, path, file, works
     return null;
   }}
 }}
-function readHippoReasonixStatus(sessionId, promptTokens, turnCost, workspace) {{
+function readHippoReasonixStatus(sessionId, promptTokens, turnCost, workspace, hasTurn) {{
   try {{
     const file = process.env.HIPPO_REASONIX_STATUS_FILE;
     if (!file) return null;
@@ -779,6 +780,8 @@ function readHippoReasonixStatus(sessionId, promptTokens, turnCost, workspace) {
     if (!data || !data.available) return null;
     const run = Number(data.saved_tokens || 0);
     if (!Number.isFinite(run)) return null;
+    const cost = Number(turnCost || 0);
+    const hasActivity = hasTurn === true || (Number.isFinite(cost) && cost > 0);
     let sessionTotal = 0;
     let lastSaved = 0;
     let contextCount = 0;
@@ -789,7 +792,7 @@ function readHippoReasonixStatus(sessionId, promptTokens, turnCost, workspace) {
       const ledgerFile = path.join(ledgerDir, `${{sessionKey}}.json`);
       const existing = readHippoJsonFile(fs, ledgerFile) || {{}};
       const runId = String(data.run_id || file);
-      const trackingMode = "reasonix_context_runs_v1";
+      const trackingMode = "reasonix_active_turn_runs_v1";
       const currentLedger = existing.tracking_mode === trackingMode;
       const runs = currentLedger && Array.isArray(existing.runs) ? existing.runs : [];
       const ledger = {{
@@ -807,7 +810,7 @@ function readHippoReasonixStatus(sessionId, promptTokens, turnCost, workspace) {
         runs,
         tracking_mode: trackingMode
       }};
-      if (runId && !ledger.runs.includes(runId)) {{
+      if (hasActivity && run > 0 && runId && !ledger.runs.includes(runId)) {{
         ledger.runs = [...ledger.runs, runId];
         ledger.saved_tokens += run;
         ledger.baseline_tokens += Number(data.baseline_tokens || 0);
@@ -819,7 +822,7 @@ function readHippoReasonixStatus(sessionId, promptTokens, turnCost, workspace) {
         writeHippoJsonFile(fs, ledgerFile, ledger);
       }}
       sessionTotal = Number(ledger.saved_tokens || 0);
-      lastSaved = run;
+      lastSaved = hasActivity ? run : Number(ledger.last_saved_tokens || 0);
       contextCount = Number(ledger.context_count || 0);
     }}
     if (!Number.isFinite(sessionTotal)) sessionTotal = 0;
@@ -830,8 +833,8 @@ function readHippoReasonixStatus(sessionId, promptTokens, turnCost, workspace) {
     return null;
   }}
 }}
-function HippoSavingsPill({{ sessionId, promptTokens, turnCost, workspace }}) {{
-  const data = readHippoReasonixStatus(sessionId, promptTokens, turnCost, workspace);
+function HippoSavingsPill({{ sessionId, promptTokens, turnCost, workspace, hasTurn }}) {{
+  const data = readHippoReasonixStatus(sessionId, promptTokens, turnCost, workspace, hasTurn);
   if (!data) return null;
   return /* @__PURE__ */ {react_name}.default.createElement(
     {react_name}.default.Fragment,
@@ -843,7 +846,7 @@ function HippoSavingsPill({{ sessionId, promptTokens, turnCost, workspace }}) {{
       /* @__PURE__ */ {react_name}.default.createElement(
         Text,
         {{ color: TONE.ok, wrap: "truncate" }},
-        "记忆节省 "
+        "预计节省 "
       ),
       /* @__PURE__ */ {react_name}.default.createElement(
         Text,

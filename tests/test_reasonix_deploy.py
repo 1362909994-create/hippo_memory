@@ -258,20 +258,23 @@ def test_reasonix_status_bar_patch_is_idempotent(tmp_path):
     assert result["patched"]
     assert again["reason"] == "already_patched"
     assert "HIPPO_REASONIX_STATUS_BAR_PATCH" in text
-    assert "HIPPO_REASONIX_STATUS_BAR_PATCH v9" in text
+    assert "HIPPO_REASONIX_STATUS_BAR_PATCH v11" in text
     assert "HIPPO_REASONIX_STATUS_FILE" in text
     assert "HippoSavingsPill" in text
     assert "sessionId: session.id" in text
     assert "promptTokens: status2.promptTokens" in text
     assert "turnCost: status2.cost" in text
     assert "workspace: session.workspace" in text
+    assert "hasTurn: hasTurn" in text
+    assert "const hasActivity = hasTurn === true" in text
+    assert "hasActivity && run > 0" in text
     assert "refreshHippoReasonixStatusForWorkspace" in text
     assert "reasonix-bootstrap-context" in text
-    assert "reasonix_context_runs_v1" in text
+    assert "reasonix_active_turn_runs_v1" in text
     assert "legacy_saved_tokens" in text
     assert "last_saved_tokens" in text
     assert "context_count" in text
-    assert "记忆节省" in text
+    assert "预计节省" in text
     assert "会话 ${formatTokens(data.sessionTotal)}" in text
     assert "statusBar.showCtxUsage" in text
     assert (cli_dir / "chunk-demo.js.hippo-status-original").exists()
