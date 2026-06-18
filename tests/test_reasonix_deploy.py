@@ -195,6 +195,10 @@ def test_reasonix_command_shim_wraps_code_invocations(tmp_path):
     assert "--status-output" in ps1
     assert "HIPPO_REASONIX_STATUS_FILE" in ps1
     assert "--system-append-file" in ps1
+    assert "Get-RecentReasonixWorkspace" in ps1
+    assert "Get-ReasonixWorkspaceFromMeta" in ps1
+    assert "Resolve-DefaultCodeRoot" in ps1
+    assert "Test-IsUnsafeCodeRoot" in ps1
     assert "reasonix.ps1" in cmd
     assert "reasonix.ps1" in sh
     assert "powershell.exe" in sh
@@ -251,12 +255,15 @@ def test_reasonix_status_bar_patch_is_idempotent(tmp_path):
     assert result["patched"]
     assert again["reason"] == "already_patched"
     assert "HIPPO_REASONIX_STATUS_BAR_PATCH" in text
-    assert "HIPPO_REASONIX_STATUS_BAR_PATCH v5" in text
+    assert "HIPPO_REASONIX_STATUS_BAR_PATCH v6" in text
     assert "HIPPO_REASONIX_STATUS_FILE" in text
     assert "HippoSavingsPill" in text
     assert "sessionId: session.id" in text
     assert "promptTokens: status2.promptTokens" in text
     assert "turnCost: status2.cost" in text
+    assert "workspace: session.workspace" in text
+    assert "refreshHippoReasonixStatusForWorkspace" in text
+    assert "reasonix-bootstrap-context" in text
     assert "reasonix_cost_turns_v2" in text
     assert "legacy_saved_tokens" in text
     assert "last_saved_tokens" in text
@@ -324,6 +331,7 @@ def test_reasonix_status_file_still_renders_when_no_savings(tmp_path):
     assert status["available"]
     assert status["scope"] == "reasonix_session"
     assert status["project"] == "demo"
+    assert status["root"] == str(tmp_path)
     assert status["saved_tokens"] == 0
     assert status["session_saved_tokens"] == 0
     assert status["reason"] == "no_token_savings_available"

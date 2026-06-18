@@ -22,7 +22,7 @@ REASONIX_SERVER_NAME = "hippo_memory"
 REASONIX_PROJECT_SPEC = f"{REASONIX_SERVER_NAME}=hippo mcp-project"
 REASONIX_SHIM_MARKER = "HIPPO_MEMORY_REASONIX_SHIM"
 REASONIX_STATUS_PATCH_MARKER = "HIPPO_REASONIX_STATUS_BAR_PATCH"
-REASONIX_STATUS_PATCH_VERSION = "v5"
+REASONIX_STATUS_PATCH_VERSION = "v6"
 REASONIX_MEMORY_FILES = (
     "REASONIX.md",
     ".claude/CLAUDE.md",
@@ -373,6 +373,7 @@ def write_reasonix_status_file(
                     "scope": "reasonix_session",
                     "run_id": run_id,
                     "project": project,
+                    "root": str(root) if root is not None else None,
                     "session_ledger_dir": (
                         str(session_ledger_dir) if session_ledger_dir else None
                     ),
@@ -399,6 +400,7 @@ def write_reasonix_status_file(
         "scope": "reasonix_session",
         "run_id": run_id,
         "project": project,
+        "root": str(root) if root is not None else None,
         "session_ledger_dir": str(session_ledger_dir) if session_ledger_dir else None,
         "saved_tokens": saved_tokens,
         "session_saved_tokens": 0,
@@ -683,7 +685,8 @@ def _patch_reasonix_status_bar_file(path: Path, old: str) -> dict[str, Any]:
             "HippoSavingsPill, { "
             "sessionId: session.id, "
             "promptTokens: status2.promptTokens, "
-            "turnCost: status2.cost "
+            "turnCost: status2.cost, "
+            "workspace: session.workspace "
             "}), "
             "statusBar.showCtxUsage",
         ),
@@ -713,7 +716,55 @@ function readHippoJsonFile(fs, file) {{
 function writeHippoJsonFile(fs, file, data) {{
   fs.writeFileSync(file, JSON.stringify(data), "utf8");
 }}
-function readHippoReasonixStatus(sessionId, promptTokens, turnCost) {{
+function hippoSamePath(a, b) {{
+  return String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+}}
+function shouldRefreshHippoStatusForWorkspace(data, workspace) {{
+  const root = String(workspace || "").trim();
+  if (!root) return false;
+  if (data && (hippoSamePath(data.root, root) || hippoSamePath(data.workspace_root, root))) {{
+    return false;
+  }}
+  const baseline = Number(data && data.baseline_tokens || 0);
+  return !data || !data.project || data.reason === "no_token_savings_available" || baseline <= 0;
+}}
+function refreshHippoReasonixStatusForWorkspace(requireFn, fs, path, file, workspace) {{
+  try {{
+    const root = String(workspace || "").trim();
+    if (!root || !fs.existsSync(root) || !fs.statSync(root).isDirectory()) return null;
+    const globalKey = "__HIPPO_REASONIX_WORKSPACE_REFRESHED__";
+    const cache = globalThis[globalKey] || (globalThis[globalKey] = {{}});
+    const key = `${{file}}|${{root}}`;
+    if (cache[key]) return null;
+    cache[key] = true;
+    const childProcess = requireFn("child_process");
+    const contextDir = path.dirname(file);
+    const output = path.join(contextDir, `system-append-ui-${{process.pid}}.md`);
+    const result = childProcess.spawnSync(
+      "hippo",
+      [
+        "reasonix-bootstrap-context",
+        "--root",
+        root,
+        "--output",
+        output,
+        "--status-output",
+        file
+      ],
+      {{ windowsHide: true, encoding: "utf8", timeout: 2e4 }}
+    );
+    if (result.error || result.status !== 0) return null;
+    const refreshed = readHippoJsonFile(fs, file);
+    if (refreshed) {{
+      refreshed.workspace_root = root;
+      writeHippoJsonFile(fs, file, refreshed);
+    }}
+    return refreshed;
+  }} catch {{
+    return null;
+  }}
+}}
+function readHippoReasonixStatus(sessionId, promptTokens, turnCost, workspace) {{
   try {{
     const file = process.env.HIPPO_REASONIX_STATUS_FILE;
     if (!file) return null;
@@ -721,7 +772,10 @@ function readHippoReasonixStatus(sessionId, promptTokens, turnCost) {{
     if (!requireFn) return null;
     const fs = requireFn("fs");
     const path = requireFn("path");
-    const data = readHippoJsonFile(fs, file);
+    let data = readHippoJsonFile(fs, file);
+    if (shouldRefreshHippoStatusForWorkspace(data, workspace)) {{
+      data = refreshHippoReasonixStatusForWorkspace(requireFn, fs, path, file, workspace) || data;
+    }}
     if (!data || !data.available) return null;
     const run = Number(data.saved_tokens || 0);
     if (!Number.isFinite(run)) return null;
@@ -789,8 +843,8 @@ function readHippoReasonixStatus(sessionId, promptTokens, turnCost) {{
     return null;
   }}
 }}
-function HippoSavingsPill({{ sessionId, promptTokens, turnCost }}) {{
-  const data = readHippoReasonixStatus(sessionId, promptTokens, turnCost);
+function HippoSavingsPill({{ sessionId, promptTokens, turnCost, workspace }}) {{
+  const data = readHippoReasonixStatus(sessionId, promptTokens, turnCost, workspace);
   if (!data) return null;
   return /* @__PURE__ */ {react_name}.default.createElement(
     {react_name}.default.Fragment,
@@ -892,6 +946,79 @@ function Test-IsBareCodeFlag([string]$Item) {{
     $Item -eq "--no-mouse" -or $Item -eq "--no-proxy"
 }}
 
+function Test-IsUnsafeCodeRoot([string]$Path) {{
+  try {{
+    $resolved = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
+  }} catch {{
+    return $true
+  }}
+  $trimmed = $resolved.TrimEnd("\\")
+  $driveRoot = ([System.IO.Path]::GetPathRoot($resolved)).TrimEnd("\\")
+  if ($trimmed -eq $driveRoot) {{ return $true }}
+  $userHome = [Environment]::GetFolderPath("UserProfile").TrimEnd("\\")
+  if ($trimmed -ieq $userHome) {{ return $true }}
+  $windir = $env:WINDIR
+  if (-not $windir) {{ $windir = $env:SystemRoot }}
+  if ($windir) {{
+    $win = $windir.TrimEnd("\\")
+    $underWin = $trimmed.StartsWith(
+      $win + "\\",
+      [StringComparison]::OrdinalIgnoreCase
+    )
+    if ($trimmed -ieq $win -or $underWin) {{
+      return $true
+    }}
+  }}
+  return $false
+}}
+
+function Get-ReasonixWorkspaceFromMeta([string]$Path) {{
+  try {{
+    $raw = Get-Content -Raw -LiteralPath $Path
+  }} catch {{
+    return $null
+  }}
+  try {{
+    $meta = $raw | ConvertFrom-Json
+    if ($meta.workspace) {{ return [string]$meta.workspace }}
+  }} catch {{
+  }}
+  $match = [regex]::Match($raw, '"workspace"\\s*:\\s*"((?:\\\\.|[^"])*)"')
+  if ($match.Success) {{
+    return $match.Groups[1].Value.Replace("\\\\", "\\")
+  }}
+  return $null
+}}
+
+function Get-RecentReasonixWorkspace {{
+  $sessionDir = Join-Path $HOME ".reasonix/sessions"
+  if (-not (Test-Path -LiteralPath $sessionDir)) {{ return $null }}
+  $files = Get-ChildItem `
+    -LiteralPath $sessionDir `
+    -Filter "*.meta.json" `
+    -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending
+  foreach ($file in $files) {{
+    try {{
+      $workspace = Get-ReasonixWorkspaceFromMeta $file.FullName
+      $exists = $workspace -and (Test-Path -LiteralPath $workspace)
+      if ($exists -and -not (Test-IsUnsafeCodeRoot $workspace)) {{
+        return (Resolve-Path -LiteralPath $workspace).Path
+      }}
+    }} catch {{
+    }}
+  }}
+  return $null
+}}
+
+function Resolve-DefaultCodeRoot {{
+  $cwd = (Get-Location).Path
+  if (-not (Test-IsUnsafeCodeRoot $cwd)) {{ return $cwd }}
+  $recent = Get-RecentReasonixWorkspace
+  if ($recent) {{ return $recent }}
+  return $cwd
+}}
+
 function Test-ShouldInject([string[]]$ArgList) {{
   if ($ArgList.Count -eq 0) {{ return $true }}
   if ($ArgList[0] -eq "code") {{ return $true }}
@@ -905,9 +1032,9 @@ function Test-ShouldInject([string[]]$ArgList) {{
 }}
 
 function Convert-ToCodeArgs([string[]]$ArgList) {{
-  if ($ArgList.Count -eq 0) {{ return @("code", ".") }}
+  if ($ArgList.Count -eq 0) {{ return @("code", (Resolve-DefaultCodeRoot)) }}
   if ($ArgList[0] -eq "code") {{ return $ArgList }}
-  $out = @("code", ".")
+  $out = @("code", (Resolve-DefaultCodeRoot))
   foreach ($item in $ArgList) {{
     if ($item -eq "-c" -or $item -eq "--continue") {{
       $out += "--resume"
