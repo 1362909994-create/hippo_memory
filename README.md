@@ -1,22 +1,35 @@
 # hippocampus-memory
 
-Reasonix-first external memory and token-saving context for AI coding.
+本地优先的 AI 外部记忆与 Reasonix 上下文压缩系统。
 
-`hippocampus-memory` 是一个本地优先的 AI 外部记忆与 vibe coding 上下文压缩系统。它不是普通 RAG 问答工具，而是给 Codex、Claude Code、DeepSeek、本地 Agent 等工具使用的“外部海马体”：把长期偏好、项目状态、历史决策、失败经验、约束、代码语义和影响范围保存到本地，再按当前任务召回、重排、压缩成短小的上下文包。
+这个项目不是普通 RAG。它的目标不是“把很多文本塞进向量库再搜索”，而是为 AI coding CLI 提供可审计、短小、按项目隔离的工作记忆：项目现状、历史决策、约束、失败经验、代码地图、影响范围和压缩后的 Context Bundle。
 
-核心目标不是“存很多东西”，而是精准召回、去重、压缩、标记过期、处理冲突，并帮助 AI 用最少 token 理解项目、选择最小改动方向。
+当前版本重点面向 Reasonix。其他 CLI 仍保留通用能力，但产品化优先级低于 Reasonix 集成。
 
-## 和普通 RAG 的区别
+## 当前状态
 
-- 普通 RAG 通常围绕文档问答；本项目围绕 Agent 工作记忆、长期记忆和代码变更上下文。
-- 普通 RAG 倾向返回资料片段；本项目生成给 AI 阅读的压缩上下文包。
-- 记忆有类型、状态、可见性、置信度、重要性、项目归属和过期策略。
-- 默认不召回 `sensitive` / `private` 记忆，避免把敏感内容塞进上下文。
-- 代码索引不复制原始项目，只保存路径、hash、摘要、符号、import 和 chunk。
+- 可用：本地 SQLite 记忆库、项目索引、Memory Pack、Project Profile、Code Map、Code Impact Pack、Context Bundle、自动存储、自动召回、轻量 MCP、Reasonix 一键部署。
+- 可选：`jieba`/`rapidfuzz` 质量增强、`tiktoken` 计数、`sentence-transformers`、Chroma、`basedpyright` 诊断。
+- 已知限制：Reasonix 状态栏里的 token 节省是“上下文压缩估算”，不是模型厂商账单实测。项目没有拦截 Reasonix 发给模型的真实请求，因此不能精确知道“如果不用 Hippo，这一轮真实会花多少 token”。
+
+## 适合谁
+
+- 经常用 Reasonix/Codex/Claude Code 做长周期项目的人。
+- 项目上下文、决策、失败经验经常被 AI 忘掉的人。
+- 想把“该读什么上下文”从手工复制粘贴变成自动调度的人。
+- 需要本地优先、默认不上传记忆的人。
+
+如果你的任务只是短问答、一次性脚本、普通文档检索，本项目会显得过重。
 
 ## 安装
 
-如果你只想在 Reasonix 里自动使用外部记忆，推荐走一键入口：
+要求：
+
+- Windows PowerShell
+- Python 3.11+
+- 已安装 Reasonix，并且 `reasonix` 在 PATH 中
+
+一键安装并部署当前项目：
 
 ```powershell
 git clone https://github.com/1362909994-create/hippo_memory.git
@@ -25,545 +38,173 @@ cd hippo_memory
 reasonix code D:\your_project
 ```
 
-完成一次全局 shim 安装后，之后也可以直接在其他项目目录运行 `reasonix` 或
-`reasonix code D:\another_project`。Reasonix 启动时会自动生成本轮 context/status；
-安全且可写的新项目目录会首次自动创建 `.hippo\hippo.db` 和 `.hippo.toml`，
-底部状态栏按 Reasonix 会话单独显示 `本轮` 和 `会话` token 节省。
+安装脚本会做这些事：
 
-脚本会安装 `hippo`、部署项目记忆、配置 Reasonix MCP、安装全局 shim，并给 Reasonix 底部状态栏加上按会话统计的 token 节省显示。
+- 安装 `hippocampus-memory`
+- 给目标项目创建 `.hippo/hippo.db` 和 `.hippo.toml`
+- 索引项目文件摘要、符号、imports 和调用线索
+- 写入 Reasonix MCP 配置：`hippo_memory=hippo mcp-project`
+- 安装全局 Reasonix shim，让 `reasonix` 启动时自动注入 Hippo Context Bundle
+- 给 Reasonix 状态栏打补丁，显示会话级“预计节省”统计
 
-开发本项目时再使用 editable 安装：
-
-```powershell
-cd D:\prj\hippocampus-memory
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -e .[dev]
-```
-
-### Reasonix 一键安装入口
-
-用户从 GitHub 下载本仓库后，可以在仓库根目录直接运行：
-
-```powershell
-.\install-reasonix-hippo.ps1 -ProjectRoot D:\your_project -ProjectName your_project
-```
-
-这个脚本会安装 `hippocampus-memory`、安装 Reasonix 全局 shim 和状态栏补丁，并对目标项目执行 `hippo reasonix-deploy`。
-如果只是想部署当前目录，可以省略参数：
-
-```powershell
-.\install-reasonix-hippo.ps1
-```
-
-如果机器没有 Python 3.11+，可以让脚本尝试用 winget 安装：
+如果机器没有 Python 3.11+，可以让脚本尝试通过 winget 安装：
 
 ```powershell
 .\install-reasonix-hippo.ps1 -InstallPythonWithWinget
 ```
 
-全局 shim 会同时覆盖 npm 生成的 `reasonix.ps1`、`reasonix.cmd` 和无扩展名
-`reasonix` 三个启动入口。对 `C:\Windows`、磁盘根目录、用户 Home 这类不适合
-自动写项目文件的位置，不会创建 `.hippo`，但状态栏仍会从 0 显示，避免误以为
-集成没有生效。
+## 卸载
 
-第一版为了 Windows 上稳定运行，没有强制安装 FAISS/Chroma 或 sentence-transformers。代码保留了 `EmbeddingBackend` 和 `VectorStore` 抽象，默认使用本地 hash embedding + SQLite JSON 向量降级实现；以后可以替换成 FAISS、Chroma、sentence-transformers、OpenAI 或本地模型。
-
-可选启用 sentence-transformers：
+撤回这台机器上的 Reasonix/Hippo 集成：
 
 ```powershell
-pip install -e .[semantic]
-$env:HIPPO_EMBEDDING_BACKEND = "sentence-transformers"
-$env:HIPPO_SENTENCE_TRANSFORMER_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+.\uninstall-reasonix-hippo.ps1 -ProjectRoot D:\your_project -RemoveProjectData -UninstallPackage
 ```
 
-如果模型不可用，系统会自动降级到本地 hash embedding，keyword search 仍可用。
+它会恢复 Reasonix 原始启动文件和 UI bundle，移除 `~\.reasonix\config.json` 里的 `hippo_memory` MCP 项，移除 `~\.reasonix\REASONIX.md` 里的 Hippo 提示块，并可选删除目标项目的 `.hippo/` 和 `.reasonix/` 本地数据。
 
-可选启用 Chroma 向量库：
+默认不会修改项目里已跟踪的 `AGENTS.md`、`CLAUDE.md` 或 `REASONIX.md`。如果确实要移除项目提示块：
 
 ```powershell
-pip install -e .[chroma]
-$env:HIPPO_VECTOR_BACKEND = "chroma"
-$env:HIPPO_CHROMA_PATH = "D:\data\hippo-chroma"
+.\uninstall-reasonix-hippo.ps1 -ProjectRoot D:\your_project -RemoveProjectMemory
 ```
 
-如果 Chroma 不可用，系统会回退到 SQLite JSON 向量存储。
-
-可选启用检索质量增强：
+## 常用命令
 
 ```powershell
-pip install -e .[quality]
+hippo project-init my-project
+hippo index-project D:\your_project --project my-project
+hippo write --project my-project --type decision --content "Use SQLite as the default local store."
+hippo search "previous decision about storage" --project my-project
+hippo pack "continue the storage task" --project my-project
+hippo project-profile --project my-project
+hippo impact "change retrieval ranking" --project my-project
+hippo auto-context "fix retrieval ranking bug" --project my-project --metadata
+hippo auto-store --project my-project --text "Decision: rank exact project facts above generic source chunks."
+hippo token-report "continue current task" --project my-project
+hippo token-ledger --project my-project
 ```
 
-`quality` 会安装 `jieba` 和 `rapidfuzz`。启用后，中文查询会优先使用词级分词并保留 n-gram 回退，Memory Pack 的近重复去重也会更稳；如果这些库不可用，系统会自动回退到内置轻量逻辑。
+## Reasonix 工作方式
 
-可选启用 LSP / tokenizer 增强：
+部署后，Reasonix 启动流程大致是：
 
-```powershell
-pip install -e .[lsp,tokens]
-```
+1. 全局 `reasonix` shim 判断当前命令是否是 `reasonix code ...`。
+2. shim 找到当前项目目录，必要时自动创建最小 `.hippo` 项目库。
+3. `hippo reasonix-bootstrap-context` 根据当前项目生成短 Context Bundle。
+4. shim 通过 `--system-append-file` 把 Context Bundle 注入 Reasonix。
+5. Reasonix 里的 MCP 工具可按需调用 `hippo_memory_context_auto` 和 `hippo_memory_memory_auto_store`。
+6. 状态栏读取 Hippo status JSON，按 Reasonix 会话单独显示预计节省。
 
-`lsp` 会安装 `basedpyright`，用于 `hippo code-diagnostics --refresh` 采集 Python 类型、导入和未定义变量诊断；没有安装时系统继续使用内置 AST 准 LSP。`tokens` 会安装 `tiktoken`，让 `token-report --model ...` 更接近目标模型 tokenizer。
+状态栏统计口径：
 
-## 快速开始
+- 新 Reasonix 会话从 0 开始。
+- 打开旧 Reasonix 会话时，读取该会话自己的 ledger。
+- 只有 Reasonix 进入真实对话轮次后，才把本次 Context Bundle 的估算节省计入会话。
+- `预计节省` 是 `baseline_tokens - output_tokens`，其中 baseline 来自项目已索引记忆和文件摘要，output 是实际注入的 Context Bundle。
+- 这不是 DeepSeek/Reasonix 的精确账单值。
 
-```powershell
-hippo init
-hippo write --project glasses --type constraint --content "用户不接受 3-4 cm 焦距的光学结构。"
-hippo write --project glasses --type task_state --content "当前目标是先让 STM32 点亮 TFT 屏幕。"
-hippo search "继续上次那个屏幕项目" --project glasses
-hippo pack "继续上次那个 STM32 点亮 TFT 的项目" --project glasses
-```
-
-默认数据库保存在当前用户目录的 `.hippocampus-memory\hippocampus.db`。也可以用 `HIPPO_DB_PATH` 指定：
-
-```powershell
-$env:HIPPO_DB_PATH = "D:\data\hippo.db"
-```
-
-## CLI
-
-```powershell
-hippo init
-hippo project-init hippocampus-memory
-hippo serve --host 127.0.0.1 --port 8765
-hippo write --project "glasses-display" --type constraint --content "用户不接受 3-4 cm 焦距的直线光学结构。"
-hippo search "TFT 屏幕不亮可能是什么原因" --project "glasses-display"
-hippo pack "继续上次那个 STM32 点亮 TFT 的项目" --project "glasses-display"
-hippo callback "继续上次那个 STM32 点亮 TFT 的项目" --project "glasses-display" --session codex
-hippo callback-reset --project "glasses-display" --session codex
-hippo index-project "D:/codex/prj1" --project "prj1"
-hippo project-profile --project "prj1"
-hippo code-map --project "prj1" --query "retriever search"
-hippo code-symbols --project "prj1" --query "search"
-hippo code-references search --project "prj1"
-hippo code-intelligence "修改 search 排序" --project "prj1"
-hippo code-diagnostics --project "prj1" --refresh
-hippo impact "给搜索加入 entity boost" --project "prj1"
-hippo run --project "prj1" --intent "给搜索加入 entity boost"
-hippo code-graph --project "prj1"
-hippo eval .\examples\retrieval_eval.jsonl
-hippo browser --project "prj1" --output .\hippo-memory-browser.html
-hippo token-report "给搜索加入 entity boost" --project "prj1"
-hippo token-ledger --project "prj1"
-hippo mcp-config --output .\hippo-mcp-config.json
-hippo daemon-script --output .\start-hippo-daemon.ps1
-hippo consolidate --project "glasses-display"
-hippo memory-supersede mem_old mem_new
-hippo stats
-```
-
-## 自动记忆与自动调度
-
-部署后的推荐入口是自动策略，而不是让宿主 AI 手动选择每一个底层命令。
-
-自动存储会从会话摘要或任务结果里筛选长期有价值的内容：高置信、非敏感的偏好、约束、决策、失败经验、任务状态会直接写入；中等置信或敏感内容默认进入候选队列；低价值闲聊、重复日志和临时噪音会跳过。
-
-```powershell
-hippo auto-store --project hippocampus-memory --text "Decision: use context.auto as the default recall entry."
-hippo auto-store --project hippocampus-memory --path .\chat-summary.txt --mode preview
-hippo candidate-list --project hippocampus-memory
-hippo candidate-accept <candidate-id>
-```
-
-自动召回会根据当前 intent 决定是否需要外部记忆，以及返回哪种上下文：小闲聊不召回；继续任务返回 compact callback pack；代码修改/调试返回 lean context bundle；项目概览返回 full context bundle；显式记忆查询返回 Memory Pack。
-
-```powershell
-hippo auto-context "continue" --project hippocampus-memory
-hippo auto-context "fix search ranking bug" --project hippocampus-memory --metadata
-```
-
-`pack`、`auto-context` 和 `run` 默认会在 CLI 中显示 token 账本：本次输出相对朴素上下文估算节省了多少 token，以及该项目历史累计节省了多少 token。统计会写入项目级 `token_ledger`，上下文本体仍正常输出；不想记录时可加 `--no-token-stats`。
-
-```powershell
-hippo pack "continue" --project hippocampus-memory
-hippo auto-context "fix search ranking bug" --project hippocampus-memory --token-model gpt-4o
-hippo token-ledger --project hippocampus-memory
-```
-
-MCP 部署时优先使用高层工具：
-
-- `memory.auto_store` / safe name `memory_auto_store`
-- `context.auto` / safe name `context_auto`
-
-`reasonix-deploy` 写入的项目提示也会引导宿主 AI 优先调用 `context_auto`，并在有意义的会话结束时调用 `memory_auto_store`。
-
-常用降 token / 去重参数：
-
-```powershell
-hippo search "TFT 屏幕不亮可能是什么原因" --project "glasses-display" --no-dedupe
-hippo pack "继续上次那个 STM32 点亮 TFT 的项目" --project "glasses-display" --compact
-hippo pack "继续上次那个 STM32 点亮 TFT 的项目" --project "glasses-display" --source-chunk-limit 0
-hippo pack "继续上次那个 STM32 点亮 TFT 的项目" --project "glasses-display" --exclude-memory-id mem_xxx
-```
-
-默认 `search` 会合并近重复结果，避免同一事实占满 top-k；`--no-dedupe` 用于调试原始召回。`--compact` 适合小任务，会减少候选数、source chunk 和解释性模板。`--exclude-memory-id` 可由 CLI / GUI / MCP 调用方传入已经注入过的记忆 ID，避免长会话里反复把同一条记忆喂给 AI。
-
-默认按项目隔离记忆：传入 `--project` 后，搜索、Pack 和报告只使用该项目的记忆，不会自动混入其他项目或空项目的“全局”记忆。
-
-也支持：
-
-```powershell
-python -m hippocampus_memory search "项目状态" --project glasses
-```
-
-## 自动项目识别
-
-在项目根目录写入 `.hippo.toml`：
-
-```powershell
-hippo project-init hippocampus-memory
-```
-
-之后在该目录或子目录运行这些命令时，可以省略 `--project`：
-
-```powershell
-hippo project-profile
-hippo impact "修改搜索评分逻辑"
-hippo run --intent "继续当前任务"
-```
-
-如果没有 `.hippo.toml`，系统会尝试用 Git root 目录名，否则使用当前目录名。
-
-## 上下文包
+## 核心产物
 
 ### Memory Pack
 
-```powershell
-hippo pack "继续上次那个 STM32 点亮 TFT 的项目" --project glasses
-```
-
-Memory Pack 是给 AI 阅读的短上下文，不是搜索结果列表。它会优先包含项目状态、约束、失败记录、确认事实、开放问题和下一步建议。
-
-如果只是一个很小的改动，可以用 `--compact` 生成更短的包；如果当前任务不需要源代码片段，可以把 `--source-chunk-limit` 设为 `0`。长会话或 GUI 集成中，调用方可以记录上一次已经注入过的 memory id，并在下一次 `pack` 时通过 `--exclude-memory-id` 或 MCP 的 `exclude_memory_ids` 传回，从外部控制“不要重复喂同一段记忆”。
-
-也可以直接使用项目级 callback 会话：
-
-```powershell
-hippo callback "继续当前任务" --project hippocampus-memory --session codex
-hippo callback "继续当前任务" --project hippocampus-memory --session codex --metadata
-hippo callback-reset --project hippocampus-memory --session codex
-```
-
-`callback` 会记住该 project/session 已经注入过的 memory id，下次自动排除，避免同一段记忆反复喂给 AI。这个状态按项目和 session 隔离，不是全局记忆。
+短上下文包，面向当前任务召回长期记忆。优先包含约束、决策、失败经验、任务状态和确认事实，默认排除 private/sensitive 记忆。
 
 ### Project Profile
 
-```powershell
-hippo project-profile --project hippocampus-memory
-```
-
-Project Profile 用来压缩整体项目理解：
-
-- 项目目标 / 背景
-- 当前实现形态
-- 已索引文件和语言分布
-- 功能清单
-- 当前状态、决策、约束、失败记录
-- 风险点和未知点
+项目级摘要，包括目标、当前状态、索引规模、功能概览、风险、未知点和最近记忆。
 
 ### Code Map
 
-```powershell
-hippo code-map --project hippocampus-memory --query "memory pack"
-```
-
-Code Map 基于项目索引输出文件摘要、符号和 import，帮助 AI 快速知道“代码长什么样、哪些文件相关”。
+基于项目索引生成的代码地图，包含文件摘要、符号、imports 和相关 chunks。它不是完整 LSP，但足够给 AI 快速定位文件。
 
 ### Code Impact Pack
 
-```powershell
-hippo impact "修改 Memory Pack 生成规则" --project hippocampus-memory
-```
+改代码前使用。根据当前 intent、项目索引、符号、调用线索和记忆，给出可能影响文件、风险、不变量、最小改动方向和建议测试。
 
-Code Impact Pack 面向 vibe coding 改动前的最小上下文：
+### Context Bundle
 
-- 当前改动意图
-- 相关长期记忆
-- 可能影响的文件
-- 风险点 / 不变量
-- 建议最小改动方向
-- 建议测试
+组合 Project Profile、Memory Pack、Code Impact Pack 和 Code Map，是 Reasonix 自动注入的主要内容。
 
-### Context Bundle / 自动喂
+## 自动存储和自动召回
 
-```powershell
-hippo run --project hippocampus-memory --intent "修改搜索评分逻辑"
-```
+自动存储：
 
-默认 `--inject print`，只打印一个完整的 Context Bundle。它会组合：
+- 高置信、非敏感的长期事实直接写入。
+- 中置信或敏感内容进入 candidate queue。
+- 闲聊、重复日志、低价值临时内容跳过。
 
-- Project Profile
-- Memory Pack
-- Code Impact Pack
-- Code Map
+自动召回：
 
-如果要启动另一个 AI coding 工具，可以把命令放在 `--` 后面：
+- 小闲聊不召回。
+- 继续任务召回 compact callback pack。
+- 调试和代码修改召回 lean Context Bundle。
+- 项目综述召回 full Context Bundle。
+- 显式记忆查询召回 Memory Pack。
 
-```powershell
-hippo run --project hippocampus-memory --intent "修改搜索评分逻辑" --inject stdin -- codex
-```
+## 数据和隐私
 
-注入模式：
+- 默认使用本地 SQLite。
+- 默认不召回 private/sensitive 记忆。
+- 项目记忆按 project 隔离，不会自动混入其他项目。
+- 项目索引不复制完整源码，只存路径、hash、摘要、符号、imports、调用线索和 chunks。
+- LLM summarizer、Chroma、sentence-transformers 都是可选能力，默认路径不要求联网。
 
-- `print`：只打印上下文，不启动命令。
-- `file`：把上下文写入临时文件，并设置 `HIPPO_CONTEXT_FILE` 后启动命令。
-- `env`：设置 `HIPPO_CONTEXT`、`HIPPO_CONTEXT_FILE`、`HIPPO_PROJECT`、`HIPPO_INTENT` 后启动命令。
-- `stdin`：把上下文写到子进程 stdin。
-- `arg`：把上下文作为最后一个命令参数追加给子进程。
+## API 和 MCP
 
-不同 AI CLI 接受上下文的方式不一样，所以第一版提供多种注入模式，而不是绑死某一个工具。
-
-`hippo run` 默认会记录一次 `session.run` event，包含 intent、命令、return code、输出摘录和 Git 状态。要把运行结果同时沉淀成长期记忆，必须显式确认：
+HTTP API：
 
 ```powershell
-hippo run --project foo --intent "修复搜索排序" --write-session-memory --yes --inject stdin -- codex
+hippo serve --host 127.0.0.1 --port 8765
 ```
 
-### MCP / Callback 入口
+轻量 MCP：
 
 ```powershell
 hippo mcp
 hippo mcp-project
-hippo mcp-config --output .\hippo-mcp-config.json
 ```
 
-这是第一版轻量 JSON-RPC stdio 工具服务，提供 `memory.write`、`memory.search`、`memory.pack`、`project.profile`、`project.impact`、`context.bundle`。后续可以升级为完整 MCP 协议适配。
+当前 MCP 是 JSON-RPC stdio 轻量实现，工具语义已稳定，但还不是完整 MCP SDK 产品。
 
-Reasonix 可以用一条命令部署项目本地记忆：
+## 测试
+
+本仓库当前测试覆盖：
+
+- 数据库 schema、CRUD、soft/hard delete
+- 检索、重排、去重、敏感过滤
+- Memory Pack、Context Bundle、Project Profile、Impact Pack
+- 项目索引、Python AST 符号提取、调用线索
+- 自动存储、自动召回策略
+- Reasonix 部署、shim、状态栏补丁、卸载恢复
+- CLI 行为、token ledger、安装脚本存在性
+
+运行：
 
 ```powershell
-cd D:\prj\vivado_mcp
-hippo reasonix-deploy --project vivado_mcp
-reasonix code .
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m ruff check hippocampus_memory tests
 ```
-
-`reasonix-deploy` 会创建 `.hippo\hippo.db`、写 `.hippo.toml`、索引项目、生成 `.hippo\hippo-mcp.ps1`，并默认把 `hippo_memory=hippo mcp-project` 追加到 `~\.reasonix\config.json`。这个配置只是 MCP 启动入口；实际记忆仍来自当前 Reasonix workspace 下的 `.hippo\hippo.db`，不会混成全局记忆。进入 Reasonix 后用 `/mcp` 可以看到 `hippo_memory_` 前缀的工具。
-
-它还会写一个短的 Reasonix 项目记忆片段：优先追加到已有 `REASONIX.md` / `AGENTS.md` / `CLAUDE.md`，没有这些文件时创建 `REASONIX.md`。这个片段只告诉 Reasonix 何时主动调用 `hippo_memory_context_callback`、`hippo_memory_context_bundle` 和 `hippo_memory_project_impact`，避免每次都手动提醒。若不想写项目提示，可加 `--no-project-memory`。
-
-如果不想改 Reasonix 全局配置：
-
-```powershell
-hippo reasonix-deploy --project vivado_mcp --no-install-global
-reasonix code . --mcp (Get-Content .\.hippo\reasonix-mcp-spec.txt)
-```
-
-Reasonix 的会话续接和 hippo 记忆是两层东西：`reasonix code . --resume` 续接 Reasonix 的聊天历史；`.hippo\hippo.db` 是项目本地外部记忆，即使开新会话也还在。
-
-### LLM Session Summarizer
-
-默认会话摘要是规则版。可以配置 OpenAI-compatible endpoint 后显式启用 LLM 摘要：
-
-```powershell
-$env:HIPPO_LLM_ENDPOINT = "http://127.0.0.1:8000/v1/chat/completions"
-$env:HIPPO_LLM_MODEL = "local-model"
-$env:HIPPO_LLM_API_KEY = "optional"
-hippo queue-session chat.txt --project hippocampus-memory --llm
-```
-
-LLM 调用失败时会回退到规则摘要。写入长期记忆仍然需要候选确认或显式 `--write --yes`。
-
-### Code Graph
-
-```powershell
-hippo code-graph --project hippocampus-memory
-```
-
-基于索引里的 `symbols` 和 `calls` 推断轻量跨文件调用边，用来辅助影响分析。它不是完整 AST/LSP 调用图。
-
-Python 文件会优先用标准库 `ast` 提取 class/function/import/call；其他语言继续使用正则 fallback。
-
-### Code Intelligence
-
-```powershell
-hippo code-symbols --project hippocampus-memory --query callback_pack
-hippo code-references callback_pack --project hippocampus-memory
-hippo code-intelligence "修改 callback 去重" --project hippocampus-memory
-hippo code-diagnostics --project hippocampus-memory --refresh
-```
-
-这是轻量的 Python 准 LSP 索引：记录函数/类定义位置、qualified name、签名、docstring、引用和调用位置。`hippo impact` 也会使用这些信息输出函数级影响范围。它目前不是完整 language server，不提供类型推断和重命名编辑；后续可接 pyright / tsserver。
-安装 `basedpyright` 后，`code-diagnostics --refresh` 会运行 `basedpyright --outputjson` 并把 diagnostics 写入项目缓存；`hippo impact` 会优先显示相关文件的存储诊断。未安装时该命令返回 unavailable，不影响其他功能。
-
-### Evaluation
-
-```powershell
-hippo eval .\bench.jsonl
-```
-
-JSONL 每行一个用例：
-
-```json
-{"query":"display task","project":"glasses","expected_contains":["TFT"]}
-```
-
-也可以检查 Pack：
-
-```json
-{"mode":"pack","query":"display task","project":"glasses","expected_contains":["TFT"],"forbidden_contains":["password"],"max_tokens":500}
-```
-
-用于检查召回是否命中预期记忆，后续可扩展成 token 节省和 Pack 质量评估。
-
-### Token Savings Report
-
-```powershell
-hippo token-report "修改搜索评分逻辑" --project hippocampus-memory
-hippo token-report "修改搜索评分逻辑" --project hippocampus-memory --model gpt-4o
-hippo token-ledger --project hippocampus-memory
-```
-
-这个报告用估算 token 对比 Context Bundle 和“直接塞入索引摘要/记忆”的朴素成本，帮助判断是否真的在省 token。
-`token-report` 默认会把本次估算写入项目级 token ledger；`token-ledger` 用来查看该项目的历史平均节省率、累计节省 token 和最近记录。安装 `tiktoken` 后，`--model` 会优先使用模型 tokenizer；否则自动回退到内置估算器。它是趋势账本，不等同于模型厂商的精确计费账单。
-
-### Daemon Script
-
-```powershell
-hippo daemon-script --output .\start-hippo-daemon.ps1
-```
-
-生成一个启动本地 daemon 的 PowerShell 脚本。它不是正式 Windows Service installer，但可以作为开机启动/任务计划程序的入口。
-
-### Memory Browser
-
-```powershell
-hippo browser --project hippocampus-memory --output .\hippo-memory-browser.html
-```
-
-生成本地 HTML 报告，展示 stats、projects 和最近的非敏感记忆。它不会默认展示 `sensitive` / `private` 内容。
-
-## API
-
-启动服务：
-
-```powershell
-hippo serve --host 127.0.0.1 --port 8765
-```
-
-已有接口：
-
-- `GET /health`
-- `POST /memory/write`
-- `POST /memory/search`
-- `POST /memory/pack`
-- `POST /memory/consolidate`
-- `POST /memory/forget`
-- `POST /project/index`
-- `GET /project/{project}/summary`
-- `GET /project/{project}/profile`
-- `POST /project/code-map`
-- `POST /project/impact`
-- `GET /project/list`
-- `GET /candidate/list`
-- `POST /candidate/accept`
-- `POST /candidate/discard`
-- `GET /conflict/list`
-- `POST /conflict/resolve`
-- `POST /session/summarize`
-- `POST /session/queue`
-- `GET /stats`
-
-## 索引项目
-
-```powershell
-hippo index-project "D:/path/to/project" --project "my-project"
-```
-
-索引器默认跳过 `.git`、`node_modules`、`.venv`、`build`、`dist`、`target`、缓存目录、二进制文件和超过 1MB 的文件。它不会复制原始工程文件，只保存路径、hash、摘要、符号、import 和 chunk。
-
-重新索引时，已经从项目里消失的文件会标记为 `missing`，不会继续作为 active 文件参与 Code Map / Impact Pack。索引器还会提取简单的 `symbols`、`imports` 和 `calls`，但第一版仍不是完整 AST。
-
-## 写入记忆
-
-```powershell
-hippo write --project glasses --type decision --content "选择先验证 TFT 背光和供电，再排查 SPI 初始化。"
-```
-
-支持类型：
-
-- `user_preference`
-- `project_context`
-- `decision`
-- `failure`
-- `constraint`
-- `technical_fact`
-- `task_state`
-- `source_chunk`
-
-## 删除记忆
-
-软删除：
-
-```powershell
-hippo forget <memory-id>
-```
-
-彻底删除：
-
-```powershell
-hippo forget <memory-id> --hard
-```
-
-删除整个项目的记忆：
-
-```powershell
-hippo forget --project glasses --hard
-```
-
-## 接入 Codex / Claude Code / DeepSeek
-
-推荐工作流：
-
-1. 会话结束时用 `hippo summarize-session chat.txt --project <project>` 生成候选记忆。
-2. 确认后写入长期记忆。
-3. 新会话开始前用 `hippo project-profile` 和 `hippo pack` 生成整体和任务上下文。
-4. 改代码前用 `hippo impact "<改动意图>" --project <project>` 生成最小改动导航。
-5. 把这些上下文包放到 Agent 的上下文开头。
-
-为了避免污染长期记忆，`summarize-session` 默认只预览候选。如果要写入，必须显式确认：
-
-```powershell
-hippo summarize-session chat.txt --project hippocampus-memory --write --yes
-```
-
-更推荐的安全流程是先入候选队列，再人工确认：
-
-```powershell
-hippo queue-session chat.txt --project hippocampus-memory
-hippo candidate-list --project hippocampus-memory
-hippo candidate-accept <candidate-id>
-hippo candidate-discard <candidate-id>
-```
-
-冲突也可以审查和解决：
-
-```powershell
-hippo conflict-list --project hippocampus-memory
-hippo conflict-resolve <conflict-id> --resolution "以用户最新确认的信息为准"
-```
-
-## 当前限制
-
-- 默认 semantic search 使用本地 hash embedding，适合 MVP 和测试，不等价于真实语义模型。
-- 会话摘要第一版是规则候选提取，不会自动判断所有隐含事实。
-- 冲突检测只覆盖关键词和实体交集，不做深层逻辑推理。
-- 项目索引使用正则提取符号，不是完整 AST。
-- Python 文件使用标准库 AST 提取基础代码结构，但仍不是完整 LSP 调用图。
-- Code Impact Pack 第一版基于索引摘要、符号和关键词重合，不等价于完整调用图。
-- `hippo mcp` 是轻量 JSON-RPC stdio 服务，还不是完整 MCP SDK 实现。
-- `hippo daemon` 是本地 HTTP 服务入口，还不是 Windows 服务/托盘程序。
-- Chroma 和 LLM summarizer 是可选能力，默认仍保持离线可用。
-- 暂无完整 GUI、权限系统和云同步。
 
 ## 路线图
 
-- Global daemon / tray app
-- MCP server
-- `hippo run` vibe coding wrapper
-- LLM-based summarizer
-- AST-based code graph
-- Git history memory
-- Visual memory browser
-- Permission system
-- Memory evaluation benchmark
+优先级最高：
+
+- 做真实 Reasonix 端到端 UI 测试。
+- 把 token 节省统计和项目 token ledger 分层，避免估算值被误解成账单值。
+- 建立更严谨的 memory admission gate，减少错误记忆进入上下文。
+- 扩展 eval benchmark，覆盖中文项目、长会话、多轮调试、敏感泄漏和冲突记忆。
+
+中期：
+
+- 完整 MCP SDK 适配。
+- 更强的代码图和影响分析。
+- 对比 Mem0/Zep/Letta/PROJECTMEM 的公开 benchmark 设计自己的评测集。
+
+低优先级或应砍掉：
+
+- 非 Reasonix CLI 的过早产品化。
+- 独立 browser/daemon 的重 UI 化。
+- 过多注入模式导致的维护面扩大。
+
+更完整的项目评估见 [docs/PROJECT_REPORT.md](docs/PROJECT_REPORT.md)。

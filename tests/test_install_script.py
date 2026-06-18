@@ -14,3 +14,13 @@ def test_reasonix_one_step_installer_script_exists() -> None:
     assert "reasonix-install-shim" in text
     assert "reasonix-deploy" in text
     assert "reasonix code" in text
+
+
+def test_reasonix_one_step_uninstaller_script_exists() -> None:
+    script = Path("uninstall-reasonix-hippo.ps1")
+
+    assert script.exists()
+    text = script.read_text(encoding="utf-8")
+    assert "reasonix-uninstall" in text
+    assert "RemoveProjectData" in text
+    assert "UninstallPackage" in text

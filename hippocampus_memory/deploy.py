@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -576,6 +577,39 @@ def install_reasonix_mcp_spec(
     return True
 
 
+def uninstall_reasonix_mcp_spec(
+    config_path: str | Path,
+    *,
+    server_name: str = REASONIX_SERVER_NAME,
+) -> bool:
+    path = Path(config_path).expanduser()
+    if not path.exists():
+        return False
+    cfg = _read_json_object(path)
+    raw_mcp = cfg.get("mcp")
+    if not isinstance(raw_mcp, list):
+        return False
+    new_mcp = [
+        item
+        for item in raw_mcp
+        if not (isinstance(item, str) and _mcp_spec_has_name(item, server_name))
+    ]
+    changed = new_mcp != raw_mcp
+    raw_disabled = cfg.get("mcpDisabled")
+    if isinstance(raw_disabled, list):
+        new_disabled = [item for item in raw_disabled if item != server_name]
+        changed = changed or new_disabled != raw_disabled
+        if new_disabled:
+            cfg["mcpDisabled"] = new_disabled
+        else:
+            cfg.pop("mcpDisabled", None)
+    if not changed:
+        return False
+    cfg["mcp"] = new_mcp
+    path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return True
+
+
 def default_reasonix_bin_dir() -> Path:
     appdata = os.environ.get("APPDATA")
     if appdata:
@@ -701,6 +735,175 @@ def _patch_reasonix_status_bar_file(path: Path, old: str) -> dict[str, Any]:
         "backup": str(backup),
         "patched": True,
     }
+
+
+def uninstall_reasonix_integration(
+    *,
+    bin_dir: str | Path | None = None,
+    config_path: str | Path | None = None,
+    reasonix_dir: str | Path | None = None,
+    root: str | Path | None = None,
+    remove_project_memory: bool = False,
+    remove_project_data: bool = False,
+    remove_temp: bool = True,
+) -> dict[str, Any]:
+    """Remove Hippo's Reasonix integration from the current machine.
+
+    This restores files only when Hippo's marker and backup are present. It does
+    not remove Reasonix itself, other MCP servers, or tracked project files.
+    """
+    target_bin = Path(bin_dir).expanduser() if bin_dir else default_reasonix_bin_dir()
+    reasonix_config = (
+        Path(config_path).expanduser() if config_path else default_reasonix_config_path()
+    )
+    reasonix_home = (
+        Path(reasonix_dir).expanduser()
+        if reasonix_dir
+        else reasonix_config.parent
+    )
+    project_root = Path(root).expanduser().resolve() if root is not None else None
+
+    result: dict[str, Any] = {
+        "bin_dir": str(target_bin),
+        "config": str(reasonix_config),
+        "reasonix_dir": str(reasonix_home),
+        "project_root": str(project_root) if project_root else None,
+        "shims": _restore_reasonix_command_shims(target_bin),
+        "status_bar_patch": restore_reasonix_status_bar(target_bin),
+        "config_updated": uninstall_reasonix_mcp_spec(reasonix_config),
+        "global_memory_removed": remove_reasonix_memory_block(reasonix_home / "REASONIX.md"),
+        "project_artifacts": {},
+        "temp_removed": False,
+    }
+    if project_root is not None:
+        result["project_artifacts"] = remove_reasonix_project_artifacts(
+            project_root,
+            remove_project_memory=remove_project_memory,
+            remove_project_data=remove_project_data,
+        )
+    if remove_temp:
+        result["temp_removed"] = _remove_directory_if_exists(
+            Path(os.environ.get("TEMP", "")) / "hippo-reasonix"
+        )
+    return result
+
+
+def _restore_reasonix_command_shims(bin_dir: Path) -> dict[str, Any]:
+    return {
+        "ps1": _restore_reasonix_shim_file(bin_dir / "reasonix.ps1"),
+        "cmd": _restore_reasonix_shim_file(bin_dir / "reasonix.cmd"),
+        "sh": _restore_reasonix_shim_file(bin_dir / "reasonix"),
+    }
+
+
+def _restore_reasonix_shim_file(path: Path) -> dict[str, Any]:
+    backup = path.with_suffix(path.suffix + ".hippo-original")
+    if not path.exists():
+        return {"path": str(path), "restored": False, "reason": "missing"}
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    if REASONIX_SHIM_MARKER not in text:
+        return {"path": str(path), "restored": False, "reason": "not_hippo_shim"}
+    if not backup.exists():
+        return {"path": str(path), "restored": False, "reason": "backup_missing"}
+    backup.replace(path)
+    return {"path": str(path), "restored": True}
+
+
+def restore_reasonix_status_bar(bin_dir: str | Path | None = None) -> dict[str, Any]:
+    target = Path(bin_dir).expanduser() if bin_dir else default_reasonix_bin_dir()
+    cli_dir = target / "node_modules" / "reasonix" / "dist" / "cli"
+    if not cli_dir.exists():
+        return {
+            "bin_dir": str(target),
+            "restored": False,
+            "reason": "reasonix_cli_dir_not_found",
+        }
+    restored: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for candidate in sorted(cli_dir.glob("chunk-*.js")):
+        old = candidate.read_text(encoding="utf-8", errors="ignore")
+        if REASONIX_STATUS_PATCH_MARKER not in old:
+            continue
+        backup = candidate.with_suffix(candidate.suffix + ".hippo-status-original")
+        if not backup.exists():
+            skipped.append(
+                {
+                    "status_bar_file": str(candidate),
+                    "restored": False,
+                    "reason": "backup_missing",
+                }
+            )
+            continue
+        backup.replace(candidate)
+        restored.append({"status_bar_file": str(candidate), "restored": True})
+    if restored:
+        return {"bin_dir": str(target), "restored": True, "files": restored}
+    if skipped:
+        return {"bin_dir": str(target), "restored": False, "files": skipped}
+    return {"bin_dir": str(target), "restored": False, "reason": "patch_not_found"}
+
+
+def remove_reasonix_memory_block(path: str | Path) -> bool:
+    target = Path(path).expanduser()
+    if not target.exists():
+        return False
+    old = target.read_text(encoding="utf-8", errors="ignore")
+    new = _remove_marked_block(old)
+    if new == old:
+        return False
+    if new.strip():
+        target.write_text(new, encoding="utf-8")
+    else:
+        target.unlink()
+    return True
+
+
+def remove_reasonix_project_artifacts(
+    root: str | Path,
+    *,
+    remove_project_memory: bool = False,
+    remove_project_data: bool = False,
+) -> dict[str, Any]:
+    root_path = Path(root).expanduser().resolve()
+    result = {
+        "root": str(root_path),
+        "project_memory_removed": False,
+        "project_data_removed": False,
+        "reasonix_cache_removed": False,
+    }
+    memory_file = _find_reasonix_memory_file(root_path)
+    if remove_project_memory and memory_file:
+        result["project_memory_removed"] = remove_reasonix_memory_block(memory_file)
+    if remove_project_data:
+        result["project_data_removed"] = _remove_directory_if_exists(root_path / HIPPO_DIR_NAME)
+        result["reasonix_cache_removed"] = _remove_directory_if_exists(root_path / ".reasonix")
+    return result
+
+
+def _remove_marked_block(text: str) -> str:
+    start = text.find(HIPPO_MEMORY_START)
+    end = text.find(HIPPO_MEMORY_END)
+    if start < 0 or end < start:
+        return text
+    end += len(HIPPO_MEMORY_END)
+    prefix = text[:start].rstrip()
+    suffix = text[end:].lstrip()
+    if prefix and suffix:
+        return prefix + "\n\n" + suffix
+    if prefix:
+        return prefix + "\n"
+    if suffix:
+        return suffix
+    return ""
+
+
+def _remove_directory_if_exists(path: Path) -> bool:
+    if not path.exists():
+        return False
+    if not path.is_dir():
+        return False
+    shutil.rmtree(path)
+    return True
 
 
 def _reasonix_status_bar_patch_helper(react_name: str) -> str:

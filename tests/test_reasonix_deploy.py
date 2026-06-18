@@ -14,6 +14,8 @@ from hippocampus_memory.deploy import (
     patch_reasonix_status_bar,
     project_mcp_database,
     reasonix_fixed_mcp_spec,
+    restore_reasonix_status_bar,
+    uninstall_reasonix_integration,
     write_reasonix_bootstrap_context,
     write_reasonix_status_file,
 )
@@ -76,6 +78,52 @@ def test_reasonix_config_install_is_idempotent_and_replaces_same_server(tmp_path
     assert cfg["apiKey"] == "keep-this"
     assert cfg["mcp"] == ["filesystem=npx server", REASONIX_PROJECT_SPEC]
     assert cfg["mcpDisabled"] == ["other"]
+
+
+def test_reasonix_uninstall_restores_global_integration_and_project_data(tmp_path):
+    bin_dir = tmp_path / "npm"
+    bin_dir.mkdir()
+    (bin_dir / "reasonix.ps1").write_text("original ps1\n", encoding="utf-8")
+    (bin_dir / "reasonix.cmd").write_text("original cmd\n", encoding="utf-8")
+    (bin_dir / "reasonix").write_text("original sh\n", encoding="utf-8")
+    install_reasonix_command_shims(bin_dir)
+
+    reasonix_dir = tmp_path / "reasonix"
+    config_path = reasonix_dir / "config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps({"mcp": ["filesystem=npx server", REASONIX_PROJECT_SPEC]}),
+        encoding="utf-8",
+    )
+    ensure_reasonix_global_memory(reasonix_dir)
+
+    root = tmp_path / "demo"
+    root.mkdir()
+    (root / ".hippo").mkdir()
+    (root / ".reasonix").mkdir()
+    agents = root / "AGENTS.md"
+    agents.write_text("keep tracked project instructions\n", encoding="utf-8")
+
+    result = uninstall_reasonix_integration(
+        bin_dir=bin_dir,
+        config_path=config_path,
+        reasonix_dir=reasonix_dir,
+        root=root,
+        remove_project_data=True,
+        remove_temp=False,
+    )
+
+    assert result["shims"]["ps1"]["restored"]
+    assert (bin_dir / "reasonix.ps1").read_text(encoding="utf-8") == "original ps1\n"
+    assert (bin_dir / "reasonix.cmd").read_text(encoding="utf-8") == "original cmd\n"
+    assert (bin_dir / "reasonix").read_text(encoding="utf-8") == "original sh\n"
+    assert not (bin_dir / "reasonix.ps1.hippo-original").exists()
+    cfg = json.loads(config_path.read_text(encoding="utf-8"))
+    assert cfg["mcp"] == ["filesystem=npx server"]
+    assert not (reasonix_dir / "REASONIX.md").exists()
+    assert not (root / ".hippo").exists()
+    assert not (root / ".reasonix").exists()
+    assert agents.read_text(encoding="utf-8") == "keep tracked project instructions\n"
 
 
 def test_reasonix_fixed_spec_quotes_paths_with_spaces(tmp_path):
@@ -278,6 +326,11 @@ def test_reasonix_status_bar_patch_is_idempotent(tmp_path):
     assert "会话 ${formatTokens(data.sessionTotal)}" in text
     assert "statusBar.showCtxUsage" in text
     assert (cli_dir / "chunk-demo.js.hippo-status-original").exists()
+    restored = restore_reasonix_status_bar(bin_dir)
+    assert restored["restored"]
+    restored_text = chunk.read_text(encoding="utf-8")
+    assert "HIPPO_REASONIX_STATUS_BAR_PATCH" not in restored_text
+    assert not (cli_dir / "chunk-demo.js.hippo-status-original").exists()
 
 
 def test_reasonix_bootstrap_context_includes_token_savings(tmp_path, monkeypatch):

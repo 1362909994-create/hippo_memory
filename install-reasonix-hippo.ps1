@@ -49,36 +49,26 @@ function Invoke-SelectedPython([hashtable]$Python, [string[]]$Arguments) {
 }
 
 function Get-HippoCommand([hashtable]$Python) {
-  $code = @"
-import os
-import shutil
-import site
-import sysconfig
-
-paths = []
-for base in (sysconfig.get_path("scripts"), os.path.join(site.USER_BASE, "Scripts")):
-    if base:
-        for name in ("hippo.exe", "hippo-script.py", "hippo"):
-            paths.append(os.path.join(base, name))
-
-for path in paths:
-    if os.path.exists(path):
-        print(path)
-        raise SystemExit(0)
-
-found = shutil.which("hippo")
-if found:
-    print(found)
-    raise SystemExit(0)
-
-raise SystemExit(1)
-"@
-  $allArgs = @($Python.PrefixArgs) + @("-c", $code)
-  $output = & $Python.File @allArgs
-  if ($LASTEXITCODE -ne 0 -or -not $output) {
-    throw "hippo command was not found after install."
+  $cmd = Get-Command hippo -ErrorAction SilentlyContinue
+  if ($cmd) {
+    return $cmd.Source
   }
-  return ($output | Select-Object -First 1).ToString().Trim()
+  $roots = @(
+    (Join-Path $env:LOCALAPPDATA "Programs\Python"),
+    (Join-Path $env:APPDATA "Python")
+  )
+  foreach ($root in $roots) {
+    if (-not (Test-Path -LiteralPath $root)) {
+      continue
+    }
+    $found = Get-ChildItem -LiteralPath $root -Recurse -Filter "hippo.exe" -ErrorAction SilentlyContinue |
+      Where-Object { $_.FullName -match "\\Scripts\\hippo\.exe$" } |
+      Select-Object -First 1
+    if ($found) {
+      return $found.FullName
+    }
+  }
+  throw "hippo command was not found after install. Close and reopen the terminal, then retry."
 }
 
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path

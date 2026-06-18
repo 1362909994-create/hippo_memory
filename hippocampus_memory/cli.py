@@ -18,6 +18,7 @@ from hippocampus_memory.deploy import (
     install_reasonix_command_shims,
     patch_reasonix_status_bar,
     project_mcp_database,
+    uninstall_reasonix_integration,
     write_daemon_script,
     write_mcp_client_config,
     write_reasonix_bootstrap_context,
@@ -547,6 +548,30 @@ def reasonix_bootstrap_context(
 def reasonix_install_shim(bin_dir: Path | None = typer.Option(None, "--bin-dir")) -> None:
     """Install the global Reasonix command shim that injects Hippo context."""
     typer.echo(install_reasonix_command_shims(bin_dir))
+
+
+@app.command("reasonix-uninstall")
+def reasonix_uninstall(
+    root: Path | None = typer.Option(None, "--root"),
+    bin_dir: Path | None = typer.Option(None, "--bin-dir"),
+    config: Path | None = typer.Option(None, "--config"),
+    reasonix_dir: Path | None = typer.Option(None, "--reasonix-dir"),
+    remove_project_memory: bool = typer.Option(False, "--remove-project-memory"),
+    remove_project_data: bool = typer.Option(False, "--remove-project-data"),
+    remove_temp: bool = typer.Option(True, "--temp/--no-temp"),
+) -> None:
+    """Remove Hippo's Reasonix shim, UI patch, MCP entry, and optional project data."""
+    typer.echo(
+        uninstall_reasonix_integration(
+            root=root,
+            bin_dir=bin_dir,
+            config_path=config,
+            reasonix_dir=reasonix_dir,
+            remove_project_memory=remove_project_memory,
+            remove_project_data=remove_project_data,
+            remove_temp=remove_temp,
+        )
+    )
 
 
 @app.command("reasonix-patch-status-bar")
