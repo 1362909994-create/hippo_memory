@@ -199,6 +199,9 @@ def test_reasonix_command_shim_wraps_code_invocations(tmp_path):
     assert "Get-ReasonixWorkspaceFromMeta" in ps1
     assert "Resolve-DefaultCodeRoot" in ps1
     assert "Test-IsUnsafeCodeRoot" in ps1
+    assert "Add-NewSessionDefault" in ps1
+    assert "--new" in ps1
+    assert "--resume" in ps1
     assert "reasonix.ps1" in cmd
     assert "reasonix.ps1" in sh
     assert "powershell.exe" in sh
@@ -255,7 +258,7 @@ def test_reasonix_status_bar_patch_is_idempotent(tmp_path):
     assert result["patched"]
     assert again["reason"] == "already_patched"
     assert "HIPPO_REASONIX_STATUS_BAR_PATCH" in text
-    assert "HIPPO_REASONIX_STATUS_BAR_PATCH v6" in text
+    assert "HIPPO_REASONIX_STATUS_BAR_PATCH v7" in text
     assert "HIPPO_REASONIX_STATUS_FILE" in text
     assert "HippoSavingsPill" in text
     assert "sessionId: session.id" in text
@@ -268,6 +271,7 @@ def test_reasonix_status_bar_patch_is_idempotent(tmp_path):
     assert "legacy_saved_tokens" in text
     assert "last_saved_tokens" in text
     assert "turn_count" in text
+    assert "#${data.turnCount}" in text
     assert "节省 本轮" in text
     assert "会话" in text
     assert "statusBar.showCtxUsage" in text

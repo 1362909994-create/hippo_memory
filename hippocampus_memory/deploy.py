@@ -22,7 +22,7 @@ REASONIX_SERVER_NAME = "hippo_memory"
 REASONIX_PROJECT_SPEC = f"{REASONIX_SERVER_NAME}=hippo mcp-project"
 REASONIX_SHIM_MARKER = "HIPPO_MEMORY_REASONIX_SHIM"
 REASONIX_STATUS_PATCH_MARKER = "HIPPO_REASONIX_STATUS_BAR_PATCH"
-REASONIX_STATUS_PATCH_VERSION = "v6"
+REASONIX_STATUS_PATCH_VERSION = "v7"
 REASONIX_MEMORY_FILES = (
     "REASONIX.md",
     ".claude/CLAUDE.md",
@@ -866,6 +866,11 @@ function HippoSavingsPill({{ sessionId, promptTokens, turnCost, workspace }}) {{
       /* @__PURE__ */ {react_name}.default.createElement(
         Text,
         {{ color: FG.faint, wrap: "truncate" }},
+        ` #${{data.turnCount}}`
+      ),
+      /* @__PURE__ */ {react_name}.default.createElement(
+        Text,
+        {{ color: FG.faint, wrap: "truncate" }},
         ` / 会话${{formatTokens(data.sessionTotal)}}`
       )
     )
@@ -944,6 +949,33 @@ function Test-HasSystemAppend([string[]]$ArgList) {{
 function Test-IsBareCodeFlag([string]$Item) {{
   return $Item -eq "-c" -or $Item -eq "--continue" -or
     $Item -eq "--no-mouse" -or $Item -eq "--no-proxy"
+}}
+
+function Test-IsHelpFlag([string[]]$ArgList) {{
+  foreach ($item in $ArgList) {{
+    if ($item -eq "-h" -or $item -eq "--help") {{ return $true }}
+  }}
+  return $false
+}}
+
+function Test-HasSessionMode([string[]]$ArgList) {{
+  foreach ($item in $ArgList) {{
+    if (
+      $item -eq "-c" -or $item -eq "--continue" -or
+      $item -eq "-r" -or $item -eq "--resume" -or
+      $item -eq "-n" -or $item -eq "--new" -or
+      $item -eq "--no-session"
+    ) {{
+      return $true
+    }}
+  }}
+  return $false
+}}
+
+function Add-NewSessionDefault([string[]]$ArgList) {{
+  if (Test-IsHelpFlag $ArgList) {{ return $ArgList }}
+  if (Test-HasSessionMode $ArgList) {{ return $ArgList }}
+  return @($ArgList + "--new")
 }}
 
 function Test-IsUnsafeCodeRoot([string]$Path) {{
@@ -1032,8 +1064,10 @@ function Test-ShouldInject([string[]]$ArgList) {{
 }}
 
 function Convert-ToCodeArgs([string[]]$ArgList) {{
-  if ($ArgList.Count -eq 0) {{ return @("code", (Resolve-DefaultCodeRoot)) }}
-  if ($ArgList[0] -eq "code") {{ return $ArgList }}
+  if ($ArgList.Count -eq 0) {{
+    return @("code", (Resolve-DefaultCodeRoot), "--new")
+  }}
+  if ($ArgList[0] -eq "code") {{ return Add-NewSessionDefault $ArgList }}
   $out = @("code", (Resolve-DefaultCodeRoot))
   foreach ($item in $ArgList) {{
     if ($item -eq "-c" -or $item -eq "--continue") {{
@@ -1042,7 +1076,7 @@ function Convert-ToCodeArgs([string[]]$ArgList) {{
       $out += $item
     }}
   }}
-  return $out
+  return Add-NewSessionDefault $out
 }}
 
 function Get-CodeRoot([string[]]$ArgList) {{
