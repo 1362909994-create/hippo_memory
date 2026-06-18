@@ -788,6 +788,307 @@ def uninstall_reasonix_integration(
     return result
 
 
+def reasonix_doctor(
+    root: str | Path = ".",
+    *,
+    config_path: str | Path | None = None,
+    bin_dir: str | Path | None = None,
+    reasonix_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Read-only diagnostic report for a Reasonix + Hippo deployment."""
+    requested_root = Path(root).expanduser().resolve()
+    root_path = requested_root
+    if requested_root.exists():
+        root_path = find_project_root(requested_root) or requested_root
+    target_bin = Path(bin_dir).expanduser() if bin_dir else default_reasonix_bin_dir()
+    reasonix_config = (
+        Path(config_path).expanduser() if config_path else default_reasonix_config_path()
+    )
+    reasonix_home = (
+        Path(reasonix_dir).expanduser()
+        if reasonix_dir
+        else reasonix_config.parent
+    )
+
+    report: dict[str, Any] = {
+        "diagnostic": "hippo_reasonix",
+        "diagnostic_version": 1,
+        "read_only": True,
+        "project": _doctor_project_state(root_path, requested_root=requested_root),
+        "reasonix_config": _doctor_reasonix_config_state(reasonix_config),
+        "global_memory": _doctor_memory_block_state(reasonix_home / "REASONIX.md"),
+        "shims": _doctor_reasonix_command_shims(target_bin),
+        "status_bar_patch": reasonix_status_bar_patch_state(target_bin),
+        "environment": _doctor_environment_state(),
+    }
+    report["ready"] = _reasonix_doctor_ready(report)
+    report["ok"] = report["ready"]
+    report["recommendations"] = _reasonix_doctor_recommendations(report)
+    return report
+
+
+def reasonix_status_bar_patch_state(bin_dir: str | Path | None = None) -> dict[str, Any]:
+    """Inspect Reasonix TUI patch state without modifying the bundle."""
+    target = Path(bin_dir).expanduser() if bin_dir else default_reasonix_bin_dir()
+    cli_dir = target / "node_modules" / "reasonix" / "dist" / "cli"
+    result: dict[str, Any] = {
+        "bin_dir": str(target),
+        "cli_dir": str(cli_dir),
+        "cli_dir_exists": cli_dir.exists(),
+        "patched": False,
+        "version": None,
+        "expected_version": REASONIX_STATUS_PATCH_VERSION,
+        "version_ok": False,
+        "backup_exists": False,
+        "patchable": False,
+        "status_bar_file": None,
+    }
+    if not cli_dir.exists():
+        result["reason"] = "reasonix_cli_dir_not_found"
+        return result
+
+    candidates = sorted(cli_dir.glob("chunk-*.js"))
+    if not candidates:
+        result["reason"] = "status_bar_chunk_not_found"
+        return result
+
+    for candidate in candidates:
+        text = candidate.read_text(encoding="utf-8", errors="ignore")
+        backup = candidate.with_suffix(candidate.suffix + ".hippo-status-original")
+        if REASONIX_STATUS_PATCH_MARKER in text:
+            match = re.search(
+                rf"{re.escape(REASONIX_STATUS_PATCH_MARKER)}\s+(\S+)",
+                text,
+            )
+            version = match.group(1) if match else None
+            result.update(
+                {
+                    "patched": True,
+                    "version": version,
+                    "version_ok": version == REASONIX_STATUS_PATCH_VERSION,
+                    "backup_exists": backup.exists(),
+                    "status_bar_file": str(candidate),
+                }
+            )
+            return result
+        if _looks_like_reasonix_status_bar_chunk(text):
+            result.update(
+                {
+                    "patchable": True,
+                    "backup_exists": backup.exists(),
+                    "status_bar_file": str(candidate),
+                }
+            )
+
+    if result["patchable"]:
+        result["reason"] = "patch_not_installed"
+    else:
+        result["reason"] = "status_bar_chunk_not_found"
+    return result
+
+
+def _doctor_project_state(
+    root_path: Path,
+    *,
+    requested_root: Path | None = None,
+) -> dict[str, Any]:
+    hippo_dir = root_path / HIPPO_DIR_NAME
+    db_path = hippo_dir / HIPPO_DB_NAME
+    config_path = root_path / ".hippo.toml"
+    requested = requested_root or root_path
+    state: dict[str, Any] = {
+        "requested_root": str(requested),
+        "root": str(root_path),
+        "resolved_from_requested_root": requested != root_path,
+        "exists": root_path.exists(),
+        "is_dir": root_path.is_dir(),
+        "project_config": str(config_path),
+        "project_config_exists": config_path.exists(),
+        "hippo_dir": str(hippo_dir),
+        "hippo_dir_exists": hippo_dir.exists(),
+        "db_path": str(db_path),
+        "db_exists": db_path.exists(),
+        "mcp_script_exists": (hippo_dir / "hippo-mcp.ps1").exists(),
+        "fixed_mcp_spec_exists": (hippo_dir / "reasonix-mcp-spec.txt").exists(),
+        "global_mcp_spec_exists": (hippo_dir / "reasonix-global-mcp-spec.txt").exists(),
+        "session_ledger_dir_exists": (hippo_dir / "reasonix-session-savings").exists(),
+    }
+    if root_path.exists() and root_path.is_dir():
+        try:
+            state["project_name"] = resolve_project_name(cwd=root_path)
+        except Exception as exc:  # pragma: no cover - defensive only
+            state["project_name_error"] = exc.__class__.__name__
+    return state
+
+
+def _doctor_reasonix_config_state(path: Path) -> dict[str, Any]:
+    state: dict[str, Any] = {
+        "path": str(path),
+        "exists": path.exists(),
+        "valid_json": False,
+        "mcp_count": 0,
+        "has_hippo_mcp": False,
+        "has_expected_mcp": False,
+        "hippo_mcp_disabled": False,
+    }
+    if not path.exists():
+        return state
+    try:
+        cfg = _read_json_object(path)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        state["parse_error"] = exc.__class__.__name__
+        return state
+
+    state["valid_json"] = True
+    raw_mcp = cfg.get("mcp", [])
+    if isinstance(raw_mcp, str):
+        mcp_specs = [raw_mcp]
+    elif isinstance(raw_mcp, list):
+        mcp_specs = [item for item in raw_mcp if isinstance(item, str)]
+    else:
+        mcp_specs = []
+    raw_disabled = cfg.get("mcpDisabled", [])
+    disabled = [str(item) for item in raw_disabled] if isinstance(raw_disabled, list) else []
+    state["mcp_count"] = len(mcp_specs)
+    state["has_hippo_mcp"] = any(
+        _mcp_spec_has_name(spec, REASONIX_SERVER_NAME) for spec in mcp_specs
+    )
+    state["has_expected_mcp"] = REASONIX_PROJECT_SPEC in mcp_specs
+    state["hippo_mcp_disabled"] = REASONIX_SERVER_NAME in disabled
+    return state
+
+
+def _doctor_memory_block_state(path: Path) -> dict[str, Any]:
+    state: dict[str, Any] = {
+        "path": str(path),
+        "exists": path.exists(),
+        "has_hippo_block": False,
+        "has_context_auto_hint": False,
+        "has_auto_store_hint": False,
+    }
+    if not path.exists():
+        return state
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    state["has_hippo_block"] = HIPPO_MEMORY_START in text and HIPPO_MEMORY_END in text
+    state["has_context_auto_hint"] = "hippo_memory_context_auto" in text
+    state["has_auto_store_hint"] = "hippo_memory_memory_auto_store" in text
+    return state
+
+
+def _doctor_reasonix_command_shims(bin_dir: Path) -> dict[str, Any]:
+    return {
+        "bin_dir": str(bin_dir),
+        "bin_dir_exists": bin_dir.exists(),
+        "ps1": _doctor_reasonix_shim_file(bin_dir / "reasonix.ps1"),
+        "cmd": _doctor_reasonix_shim_file(bin_dir / "reasonix.cmd"),
+        "sh": _doctor_reasonix_shim_file(bin_dir / "reasonix"),
+    }
+
+
+def _doctor_reasonix_shim_file(path: Path) -> dict[str, Any]:
+    backup = path.with_suffix(path.suffix + ".hippo-original")
+    state = {
+        "path": str(path),
+        "exists": path.exists(),
+        "is_hippo_shim": False,
+        "backup_exists": backup.exists(),
+    }
+    if not path.exists():
+        return state
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    state["is_hippo_shim"] = REASONIX_SHIM_MARKER in text
+    return state
+
+
+def _doctor_environment_state() -> dict[str, Any]:
+    hippo = shutil.which("hippo")
+    reasonix = shutil.which("reasonix")
+    return {
+        "hippo_on_path": bool(hippo),
+        "hippo_path": hippo,
+        "reasonix_on_path": bool(reasonix),
+        "reasonix_path": reasonix,
+    }
+
+
+def _reasonix_doctor_ready(report: dict[str, Any]) -> bool:
+    project = report["project"]
+    config = report["reasonix_config"]
+    memory = report["global_memory"]
+    shims = report["shims"]
+    status_patch = report["status_bar_patch"]
+    env = report["environment"]
+    shim_ready = any(
+        shims[name]["is_hippo_shim"] for name in ("ps1", "cmd", "sh")
+    )
+    return bool(
+        project["exists"]
+        and project["is_dir"]
+        and project["db_exists"]
+        and project["project_config_exists"]
+        and config["valid_json"]
+        and config["has_hippo_mcp"]
+        and not config["hippo_mcp_disabled"]
+        and memory["has_hippo_block"]
+        and shim_ready
+        and status_patch["patched"]
+        and status_patch["version_ok"]
+        and env["hippo_on_path"]
+        and env["reasonix_on_path"]
+    )
+
+
+def _reasonix_doctor_recommendations(report: dict[str, Any]) -> list[str]:
+    project = report["project"]
+    config = report["reasonix_config"]
+    memory = report["global_memory"]
+    shims = report["shims"]
+    status_patch = report["status_bar_patch"]
+    env = report["environment"]
+    root = project["root"]
+    recommendations: list[str] = []
+
+    if not project["exists"] or not project["is_dir"]:
+        recommendations.append(f"Choose an existing project root: {root}")
+    elif not project["db_exists"] or not project["project_config_exists"]:
+        recommendations.append(f"Run: hippo reasonix-deploy --root {root}")
+
+    if not config["exists"] or not config["valid_json"]:
+        recommendations.append(
+            "Run Reasonix once, then run: hippo reasonix-deploy --root <project>"
+        )
+    elif not config["has_hippo_mcp"]:
+        recommendations.append(f"Add the Reasonix MCP entry: {REASONIX_PROJECT_SPEC}")
+    elif config["hippo_mcp_disabled"]:
+        recommendations.append("Enable the hippo_memory MCP server in Reasonix config.")
+
+    if not memory["has_hippo_block"]:
+        recommendations.append("Run: hippo reasonix-deploy --root <project>")
+
+    if not any(shims[name]["is_hippo_shim"] for name in ("ps1", "cmd", "sh")):
+        recommendations.append("Run: hippo reasonix-install-shim")
+
+    if status_patch.get("reason") == "reasonix_cli_dir_not_found":
+        recommendations.append("Install Reasonix or pass --bin-dir to the npm bin directory.")
+    elif not status_patch["patched"] or not status_patch["version_ok"]:
+        recommendations.append("Run: hippo reasonix-patch-status-bar")
+
+    if not env["hippo_on_path"]:
+        recommendations.append("Install Hippo on PATH before using the global Reasonix shim.")
+    if not env["reasonix_on_path"]:
+        recommendations.append("Install Reasonix or make sure reasonix is on PATH.")
+
+    return list(dict.fromkeys(recommendations))
+
+
+def _looks_like_reasonix_status_bar_chunk(text: str) -> bool:
+    return (
+        "function StatusRow({" in text
+        and "statusBar.showCtxUsage" in text
+        and "formatTokens" in text
+    )
+
+
 def _restore_reasonix_command_shims(bin_dir: Path) -> dict[str, Any]:
     return {
         "ps1": _restore_reasonix_shim_file(bin_dir / "reasonix.ps1"),

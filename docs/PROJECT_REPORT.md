@@ -459,3 +459,27 @@ saved_tokens = baseline_tokens - output_tokens
 - 已从当前电脑删除全局 Hippo/Reasonix 部署。
 
 当前代码仍应保留在 GitHub，因为它已经具备可试用价值。但下一阶段不应继续扩散功能面，应集中补 E2E、benchmark、memory admission 和稳定部署/卸载。
+
+## 15. 本轮优化：部署诊断入口
+
+根据上面“必须加 `hippo doctor`”的结论，本轮已经补上一个只读诊断入口：
+
+- 新增 `hippo doctor --root <project>` 和 `--json` 输出。
+- 检查项目本地 `.hippo/hippo.db`、`.hippo.toml`、Reasonix MCP 配置、全局 `REASONIX.md` 提示块、Reasonix command shim、状态栏 bundle patch、`hippo`/`reasonix` PATH。
+- 诊断只读，不创建目录、不写配置、不修补 bundle。
+- 输出 `ready` 和 `recommendations`，用于解释为什么“打开 Reasonix 后没有 token 节省 UI”或“换项目后自动注入没生效”。
+
+自查后修正的点：
+
+- `ready` 不能只看文件是否存在，还必须确认 `hippo` 和 `reasonix` 在 PATH 中，否则全局 shim 实际不可用。
+- 诊断不能泄露 `~/.reasonix/config.json` 的 API key 或完整配置，只返回布尔值、计数和路径。
+- 状态栏已打补丁时可能没有失败原因字段，推荐逻辑必须用安全读取，避免诊断命令自身崩溃。
+- `--root` 指向项目子目录时必须向上解析到真正的项目根目录，否则会误报 `.hippo.toml` 和项目数据库缺失。
+- 缺失的 Reasonix `config.json` 不能被报告成 `valid_json: true`，否则会误导部署排查。
+
+新增测试：
+
+- 临时目录模拟完整 Reasonix 部署，确认 doctor 能识别 ready 状态。
+- 从项目子目录运行 doctor，确认能回到项目根目录判断部署状态。
+- 临时目录模拟缺失部署，确认 doctor 不写入任何文件并给出修复建议。
+- CLI `hippo doctor --json` 输出可被稳定解析。

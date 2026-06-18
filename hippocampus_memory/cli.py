@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import asdict
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from hippocampus_memory.deploy import (
     install_reasonix_command_shims,
     patch_reasonix_status_bar,
     project_mcp_database,
+    reasonix_doctor,
     uninstall_reasonix_integration,
     write_daemon_script,
     write_mcp_client_config,
@@ -580,6 +582,27 @@ def reasonix_patch_status_bar(
 ) -> None:
     """Patch the installed Reasonix TUI to show Hippo token savings."""
     typer.echo(patch_reasonix_status_bar(bin_dir))
+
+
+@app.command("doctor")
+def doctor(
+    root: Path = typer.Option(Path("."), "--root"),
+    config: Path | None = typer.Option(None, "--config"),
+    bin_dir: Path | None = typer.Option(None, "--bin-dir"),
+    reasonix_dir: Path | None = typer.Option(None, "--reasonix-dir"),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
+) -> None:
+    """Diagnose Hippo's project-local Reasonix deployment without modifying files."""
+    report = reasonix_doctor(
+        root=root,
+        config_path=config,
+        bin_dir=bin_dir,
+        reasonix_dir=reasonix_dir,
+    )
+    if json_output:
+        typer.echo(json.dumps(report, indent=2, ensure_ascii=False))
+    else:
+        typer.echo(report)
 
 
 @app.command("eval")

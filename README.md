@@ -53,6 +53,18 @@ reasonix code D:\your_project
 .\install-reasonix-hippo.ps1 -InstallPythonWithWinget
 ```
 
+## 部署自检
+
+部署后先跑一次只读诊断，确认项目库、Reasonix MCP 配置、全局 shim、状态栏补丁和全局提示块是否都在位：
+
+```powershell
+hippo doctor --root D:\your_project
+hippo doctor --root D:\your_project --json
+```
+
+`ready: true` 表示 Reasonix 自动注入路径基本齐全。`recommendations` 会告诉你缺的是 `reasonix-deploy`、`reasonix-install-shim`、状态栏补丁、PATH，还是 Reasonix 本身。
+如果 `--root` 指向项目子目录，doctor 会自动向上查找 `.hippo.toml` 或 `.hippo/hippo.db` 所在的项目根目录。
+
 ## 卸载
 
 撤回这台机器上的 Reasonix/Hippo 集成：
@@ -83,6 +95,7 @@ hippo auto-context "fix retrieval ranking bug" --project my-project --metadata
 hippo auto-store --project my-project --text "Decision: rank exact project facts above generic source chunks."
 hippo token-report "continue current task" --project my-project
 hippo token-ledger --project my-project
+hippo doctor --root D:\your_project --json
 ```
 
 ## Reasonix 工作方式

@@ -13,12 +13,54 @@ from hippocampus_memory.deploy import (
     install_reasonix_mcp_spec,
     patch_reasonix_status_bar,
     project_mcp_database,
+    reasonix_doctor,
     reasonix_fixed_mcp_spec,
     restore_reasonix_status_bar,
     uninstall_reasonix_integration,
     write_reasonix_bootstrap_context,
     write_reasonix_status_file,
 )
+
+
+def _write_fake_reasonix_status_chunk(bin_dir):
+    cli_dir = bin_dir / "node_modules" / "reasonix" / "dist" / "cli"
+    cli_dir.mkdir(parents=True)
+    chunk = cli_dir / "chunk-demo.js"
+    chunk.write_text(
+        "\n".join(
+            [
+                'import { formatTokens } from "./chunk-demo2.js";',
+                "function Pill({ children }) {",
+                "  return /* @__PURE__ */ import_react16.default.createElement(",
+                "    Box_default, {}, children",
+                "  );",
+                "}",
+                "function Gap() {",
+                "  return /* @__PURE__ */ import_react16.default.createElement(",
+                '    Text, null, " "',
+                "  );",
+                "}",
+                "function StatusRow({",
+                "  statusBar = DEFAULT_STATUS_BAR_CONFIG",
+                "}) {",
+                "  return /* @__PURE__ */ import_react16.default.createElement(",
+                "    Box_default, null,",
+                "    statusBar.showCacheHit &&",
+                "    /* @__PURE__ */ import_react16.default.createElement(",
+                "      import_react16.default.Fragment, null,",
+                "      /* @__PURE__ */ import_react16.default.createElement(Gap, null),",
+                "      /* @__PURE__ */ import_react16.default.createElement(",
+                "        Pill, null,",
+                "        /* @__PURE__ */ import_react16.default.createElement(",
+                "          Text, { color: TONE.accent },",
+                '          `${t("statusBar.cache")} ${Math.round(status2.cacheHit * 100)}%`)))'
+                ", statusBar.showCtxUsage && true);",
+                "}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return chunk
 
 
 def test_reasonix_deploy_creates_project_local_mcp(tmp_path):
@@ -261,43 +303,8 @@ def test_reasonix_command_shim_wraps_code_invocations(tmp_path):
 
 def test_reasonix_status_bar_patch_is_idempotent(tmp_path):
     bin_dir = tmp_path / "npm"
-    cli_dir = bin_dir / "node_modules" / "reasonix" / "dist" / "cli"
-    cli_dir.mkdir(parents=True)
-    chunk = cli_dir / "chunk-demo.js"
-    chunk.write_text(
-        "\n".join(
-            [
-                'import { formatTokens } from "./chunk-demo2.js";',
-                "function Pill({ children }) {",
-                "  return /* @__PURE__ */ import_react16.default.createElement(",
-                "    Box_default, {}, children",
-                "  );",
-                "}",
-                "function Gap() {",
-                "  return /* @__PURE__ */ import_react16.default.createElement(",
-                '    Text, null, " "',
-                "  );",
-                "}",
-                "function StatusRow({",
-                "  statusBar = DEFAULT_STATUS_BAR_CONFIG",
-                "}) {",
-                "  return /* @__PURE__ */ import_react16.default.createElement(",
-                "    Box_default, null,",
-                "    statusBar.showCacheHit &&",
-                "    /* @__PURE__ */ import_react16.default.createElement(",
-                "      import_react16.default.Fragment, null,",
-                "      /* @__PURE__ */ import_react16.default.createElement(Gap, null),",
-                "      /* @__PURE__ */ import_react16.default.createElement(",
-                "        Pill, null,",
-                "        /* @__PURE__ */ import_react16.default.createElement(",
-                "          Text, { color: TONE.accent },",
-                '          `${t("statusBar.cache")} ${Math.round(status2.cacheHit * 100)}%`)))'
-                ", statusBar.showCtxUsage && true);",
-                "}",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    chunk = _write_fake_reasonix_status_chunk(bin_dir)
+    cli_dir = chunk.parent
 
     result = patch_reasonix_status_bar(bin_dir)
     again = patch_reasonix_status_bar(bin_dir)
@@ -394,3 +401,110 @@ def test_reasonix_status_file_still_renders_when_no_savings(tmp_path):
     assert status["saved_tokens"] == 0
     assert status["session_saved_tokens"] == 0
     assert status["reason"] == "no_token_savings_available"
+
+
+def test_reasonix_doctor_reports_ready_deployment(tmp_path, monkeypatch):
+    root = tmp_path / "demo"
+    root.mkdir()
+    (root / "README.md").write_text("# Demo\n", encoding="utf-8")
+    config_path = tmp_path / "reasonix" / "config.json"
+    bin_dir = tmp_path / "npm"
+    _write_fake_reasonix_status_chunk(bin_dir)
+
+    deploy_reasonix(root, project="demo", config_path=config_path)
+    install_reasonix_command_shims(bin_dir)
+    monkeypatch.setattr(
+        "hippocampus_memory.deploy.shutil.which",
+        lambda name: str(tmp_path / f"{name}.cmd")
+        if name in {"hippo", "reasonix"}
+        else None,
+    )
+
+    report = reasonix_doctor(
+        root,
+        config_path=config_path,
+        reasonix_dir=config_path.parent,
+        bin_dir=bin_dir,
+    )
+
+    assert report["read_only"]
+    assert report["ready"]
+    assert report["project"]["db_exists"]
+    assert report["project"]["project_config_exists"]
+    assert report["reasonix_config"]["has_hippo_mcp"]
+    assert report["reasonix_config"]["has_expected_mcp"]
+    assert not report["reasonix_config"]["hippo_mcp_disabled"]
+    assert report["global_memory"]["has_hippo_block"]
+    assert report["shims"]["ps1"]["is_hippo_shim"]
+    assert report["status_bar_patch"]["patched"]
+    assert report["status_bar_patch"]["version_ok"]
+    assert report["recommendations"] == []
+
+    subdir = root / "src" / "package"
+    subdir.mkdir(parents=True)
+    subdir_report = reasonix_doctor(
+        subdir,
+        config_path=config_path,
+        reasonix_dir=config_path.parent,
+        bin_dir=bin_dir,
+    )
+    assert subdir_report["ready"]
+    assert subdir_report["project"]["requested_root"] == str(subdir.resolve())
+    assert subdir_report["project"]["root"] == str(root.resolve())
+    assert subdir_report["project"]["resolved_from_requested_root"]
+
+
+def test_reasonix_doctor_reports_missing_state_without_mutating(tmp_path):
+    root = tmp_path / "missing"
+    config_path = tmp_path / "reasonix" / "config.json"
+    bin_dir = tmp_path / "npm"
+    reasonix_dir = tmp_path / "reasonix"
+
+    report = reasonix_doctor(
+        root,
+        config_path=config_path,
+        reasonix_dir=reasonix_dir,
+        bin_dir=bin_dir,
+    )
+
+    assert not report["ready"]
+    assert not report["project"]["exists"]
+    assert not report["reasonix_config"]["exists"]
+    assert not report["reasonix_config"]["valid_json"]
+    assert not report["global_memory"]["exists"]
+    assert not report["shims"]["bin_dir_exists"]
+    assert report["status_bar_patch"]["reason"] == "reasonix_cli_dir_not_found"
+    assert any("reasonix-deploy" in item for item in report["recommendations"])
+    assert not root.exists()
+    assert not config_path.exists()
+    assert not bin_dir.exists()
+
+
+def test_reasonix_doctor_cli_json(tmp_path):
+    root = tmp_path / "demo"
+    root.mkdir()
+    config_path = tmp_path / "reasonix" / "config.json"
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "doctor",
+            "--root",
+            str(root),
+            "--config",
+            str(config_path),
+            "--bin-dir",
+            str(tmp_path / "npm"),
+            "--reasonix-dir",
+            str(config_path.parent),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["diagnostic"] == "hippo_reasonix"
+    assert payload["read_only"]
+    assert payload["project"]["root"] == str(root.resolve())
+    assert "recommendations" in payload
