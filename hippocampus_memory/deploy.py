@@ -22,7 +22,7 @@ REASONIX_SERVER_NAME = "hippo_memory"
 REASONIX_PROJECT_SPEC = f"{REASONIX_SERVER_NAME}=hippo mcp-project"
 REASONIX_SHIM_MARKER = "HIPPO_MEMORY_REASONIX_SHIM"
 REASONIX_STATUS_PATCH_MARKER = "HIPPO_REASONIX_STATUS_BAR_PATCH"
-REASONIX_STATUS_PATCH_VERSION = "v8"
+REASONIX_STATUS_PATCH_VERSION = "v9"
 REASONIX_MEMORY_FILES = (
     "REASONIX.md",
     ".claude/CLAUDE.md",
@@ -843,7 +843,7 @@ function HippoSavingsPill({{ sessionId, promptTokens, turnCost, workspace }}) {{
       /* @__PURE__ */ {react_name}.default.createElement(
         Text,
         {{ color: TONE.ok, wrap: "truncate" }},
-        "Hippo inject "
+        "记忆节省 "
       ),
       /* @__PURE__ */ {react_name}.default.createElement(
         Text,
@@ -853,12 +853,7 @@ function HippoSavingsPill({{ sessionId, promptTokens, turnCost, workspace }}) {{
       /* @__PURE__ */ {react_name}.default.createElement(
         Text,
         {{ color: FG.faint, wrap: "truncate" }},
-        ` x${{data.contextCount}}`
-      ),
-      /* @__PURE__ */ {react_name}.default.createElement(
-        Text,
-        {{ color: FG.faint, wrap: "truncate" }},
-        ` / session ${{formatTokens(data.sessionTotal)}}`
+        ` / 会话 ${{formatTokens(data.sessionTotal)}}`
       )
     )
   );
