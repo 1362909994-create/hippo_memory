@@ -22,7 +22,7 @@ REASONIX_SERVER_NAME = "hippo_memory"
 REASONIX_PROJECT_SPEC = f"{REASONIX_SERVER_NAME}=hippo mcp-project"
 REASONIX_SHIM_MARKER = "HIPPO_MEMORY_REASONIX_SHIM"
 REASONIX_STATUS_PATCH_MARKER = "HIPPO_REASONIX_STATUS_BAR_PATCH"
-REASONIX_STATUS_PATCH_VERSION = "v7"
+REASONIX_STATUS_PATCH_VERSION = "v8"
 REASONIX_MEMORY_FILES = (
     "REASONIX.md",
     ".claude/CLAUDE.md",
@@ -781,27 +781,16 @@ function readHippoReasonixStatus(sessionId, promptTokens, turnCost, workspace) {
     if (!Number.isFinite(run)) return null;
     let sessionTotal = 0;
     let lastSaved = 0;
-    let turnCount = 0;
+    let contextCount = 0;
     const sessionKey = sessionId ? hippoSafeSessionFileName(sessionId) : null;
     const ledgerDir = data.session_ledger_dir;
     if (sessionKey && ledgerDir) {{
       fs.mkdirSync(ledgerDir, {{ recursive: true }});
       const ledgerFile = path.join(ledgerDir, `${{sessionKey}}.json`);
       const existing = readHippoJsonFile(fs, ledgerFile) || {{}};
-      const turnTokenCount = Number(promptTokens || 0);
-      const turnCostValue = Number(turnCost || 0);
-      const hasRealTurn = Number.isFinite(turnTokenCount)
-        && turnTokenCount > 0
-        && Number.isFinite(turnCostValue)
-        && turnCostValue > 0;
-      const turnKey = hasRealTurn
-        ? `prompt:${{Math.round(turnTokenCount)}}:cost:${{Math.round(turnCostValue * 1e6)}}`
-        : "";
-      const trackingMode = "reasonix_cost_turns_v2";
+      const runId = String(data.run_id || file);
+      const trackingMode = "reasonix_context_runs_v1";
       const currentLedger = existing.tracking_mode === trackingMode;
-      const turnKeys = currentLedger && Array.isArray(existing.turn_keys)
-        ? existing.turn_keys
-        : [];
       const runs = currentLedger && Array.isArray(existing.runs) ? existing.runs : [];
       const ledger = {{
         ...(currentLedger ? existing : {{
@@ -814,31 +803,29 @@ function readHippoReasonixStatus(sessionId, promptTokens, turnCost, workspace) {
         baseline_tokens: currentLedger ? Number(existing.baseline_tokens || 0) : 0,
         output_tokens: currentLedger ? Number(existing.output_tokens || 0) : 0,
         last_saved_tokens: currentLedger ? Number(existing.last_saved_tokens || 0) : 0,
-        turn_count: currentLedger ? Number(existing.turn_count || 0) : 0,
+        context_count: currentLedger ? Number(existing.context_count || 0) : 0,
         runs,
-        turn_keys: turnKeys,
         tracking_mode: trackingMode
       }};
-      if (turnKey && !ledger.turn_keys.includes(turnKey)) {{
-        ledger.turn_keys = [...ledger.turn_keys, turnKey];
-        ledger.runs = [...ledger.runs, String(data.run_id || file)];
+      if (runId && !ledger.runs.includes(runId)) {{
+        ledger.runs = [...ledger.runs, runId];
         ledger.saved_tokens += run;
         ledger.baseline_tokens += Number(data.baseline_tokens || 0);
         ledger.output_tokens += Number(data.output_tokens || 0);
         ledger.last_saved_tokens = run;
-        ledger.last_turn_key = turnKey;
-        ledger.turn_count += 1;
+        ledger.last_run_id = runId;
+        ledger.context_count += 1;
         ledger.updated_at = new Date().toISOString();
         writeHippoJsonFile(fs, ledgerFile, ledger);
       }}
       sessionTotal = Number(ledger.saved_tokens || 0);
-      lastSaved = Number(ledger.last_saved_tokens || 0);
-      turnCount = Number(ledger.turn_count || 0);
+      lastSaved = run;
+      contextCount = Number(ledger.context_count || 0);
     }}
     if (!Number.isFinite(sessionTotal)) sessionTotal = 0;
     if (!Number.isFinite(lastSaved)) lastSaved = 0;
-    if (!Number.isFinite(turnCount)) turnCount = 0;
-    return {{ run: lastSaved, sessionTotal, turnCount }};
+    if (!Number.isFinite(contextCount)) contextCount = 0;
+    return {{ run: lastSaved, sessionTotal, contextCount }};
   }} catch {{
     return null;
   }}
@@ -856,7 +843,7 @@ function HippoSavingsPill({{ sessionId, promptTokens, turnCost, workspace }}) {{
       /* @__PURE__ */ {react_name}.default.createElement(
         Text,
         {{ color: TONE.ok, wrap: "truncate" }},
-        "节省 本轮"
+        "Hippo inject "
       ),
       /* @__PURE__ */ {react_name}.default.createElement(
         Text,
@@ -866,12 +853,12 @@ function HippoSavingsPill({{ sessionId, promptTokens, turnCost, workspace }}) {{
       /* @__PURE__ */ {react_name}.default.createElement(
         Text,
         {{ color: FG.faint, wrap: "truncate" }},
-        ` #${{data.turnCount}}`
+        ` x${{data.contextCount}}`
       ),
       /* @__PURE__ */ {react_name}.default.createElement(
         Text,
         {{ color: FG.faint, wrap: "truncate" }},
-        ` / 会话${{formatTokens(data.sessionTotal)}}`
+        ` / session ${{formatTokens(data.sessionTotal)}}`
       )
     )
   );
