@@ -526,6 +526,11 @@ def reasonix_bootstrap_context(
         "project overview and coding session bootstrap",
         "--intent",
     ),
+    auto_project: bool = typer.Option(
+        True,
+        "--auto-project/--no-auto-project",
+        help="Create a minimal project-local .hippo store on first Reasonix open.",
+    ),
 ) -> None:
     """Write the system-append context used by the Reasonix command shim."""
     path = write_reasonix_bootstrap_context(
@@ -533,6 +538,7 @@ def reasonix_bootstrap_context(
         output=output,
         intent=intent,
         status_output=status_output,
+        auto_project=auto_project,
     )
     typer.echo({"context_file": str(path)})
 

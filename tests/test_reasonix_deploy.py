@@ -15,6 +15,7 @@ from hippocampus_memory.deploy import (
     project_mcp_database,
     reasonix_fixed_mcp_spec,
     write_reasonix_bootstrap_context,
+    write_reasonix_status_file,
 )
 
 
@@ -175,24 +176,31 @@ def test_reasonix_command_shim_wraps_code_invocations(tmp_path):
     bin_dir.mkdir()
     (bin_dir / "reasonix.ps1").write_text("original ps1\n", encoding="utf-8")
     (bin_dir / "reasonix.cmd").write_text("original cmd\n", encoding="utf-8")
+    (bin_dir / "reasonix").write_text("original sh\n", encoding="utf-8")
 
     result = install_reasonix_command_shims(bin_dir)
     again = install_reasonix_command_shims(bin_dir)
 
     ps1 = (bin_dir / "reasonix.ps1").read_text(encoding="utf-8")
     cmd = (bin_dir / "reasonix.cmd").read_text(encoding="utf-8")
+    sh = (bin_dir / "reasonix").read_text(encoding="utf-8")
     assert result["ps1_updated"]
     assert result["cmd_updated"]
+    assert result["sh_updated"]
     assert not again["ps1_updated"]
     assert not again["cmd_updated"]
+    assert not again["sh_updated"]
     assert "HIPPO_MEMORY_REASONIX_SHIM" in ps1
     assert "reasonix-bootstrap-context" in ps1
     assert "--status-output" in ps1
     assert "HIPPO_REASONIX_STATUS_FILE" in ps1
     assert "--system-append-file" in ps1
     assert "reasonix.ps1" in cmd
+    assert "reasonix.ps1" in sh
+    assert "powershell.exe" in sh
     assert (bin_dir / "reasonix.ps1.hippo-original").exists()
     assert (bin_dir / "reasonix.cmd.hippo-original").exists()
+    assert (bin_dir / "reasonix.hippo-original").exists()
     assert result["status_bar_patch"]["reason"] == "reasonix_cli_dir_not_found"
 
 
@@ -286,3 +294,36 @@ def test_reasonix_bootstrap_context_includes_token_savings(tmp_path, monkeypatch
     assert status["session_saved_tokens"] == 0
     assert status["total_saved_tokens"] == 0
     assert status["project_total_saved_tokens"] >= status["saved_tokens"]
+
+
+def test_reasonix_bootstrap_context_auto_deploys_new_project(tmp_path, monkeypatch):
+    db_path = tmp_path / "global.db"
+    monkeypatch.setenv("HIPPO_DB_PATH", str(db_path))
+    root = tmp_path / "fresh"
+    root.mkdir()
+    (root / "app.py").write_text("def hello():\n    return 'ok'\n", encoding="utf-8")
+
+    output = tmp_path / "context.md"
+    status_output = tmp_path / "status.json"
+    write_reasonix_bootstrap_context(root, output, status_output=status_output)
+
+    status = json.loads(status_output.read_text(encoding="utf-8"))
+    assert (root / ".hippo.toml").exists()
+    assert (root / ".hippo" / "hippo.db").exists()
+    assert status["available"]
+    assert status["project"] == "fresh"
+    assert status["saved_tokens"] >= 0
+
+
+def test_reasonix_status_file_still_renders_when_no_savings(tmp_path):
+    output = tmp_path / "status.json"
+
+    write_reasonix_status_file(output, None, project="demo", root=tmp_path)
+
+    status = json.loads(output.read_text(encoding="utf-8"))
+    assert status["available"]
+    assert status["scope"] == "reasonix_session"
+    assert status["project"] == "demo"
+    assert status["saved_tokens"] == 0
+    assert status["session_saved_tokens"] == 0
+    assert status["reason"] == "no_token_savings_available"

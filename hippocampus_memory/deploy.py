@@ -214,6 +214,7 @@ def write_reasonix_bootstrap_context(
     *,
     intent: str = "project overview and coding session bootstrap",
     status_output: str | Path | None = None,
+    auto_project: bool = True,
 ) -> Path:
     root_path = Path(root).expanduser().resolve()
     output_path = (
@@ -222,6 +223,8 @@ def write_reasonix_bootstrap_context(
         else root_path / HIPPO_DIR_NAME / "reasonix-system-append.md"
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    if auto_project:
+        ensure_reasonix_bootstrap_project(root_path)
     project = resolve_project_name(cwd=root_path)
     token_savings: dict[str, Any] | None = None
     try:
@@ -258,6 +261,99 @@ def write_reasonix_bootstrap_context(
     return output_path
 
 
+def ensure_reasonix_bootstrap_project(
+    root: str | Path = ".",
+    *,
+    project: str | None = None,
+    index_project: bool = True,
+) -> dict[str, Any]:
+    """Create the minimal project-local store needed by the Reasonix shim.
+
+    This is intentionally smaller than ``deploy_reasonix``: opening Reasonix in
+    a new folder should create the DB/index needed for context and status-bar
+    accounting, but it should not rewrite Reasonix project prompt files.
+    """
+    root_path = Path(root).expanduser().resolve()
+    if not root_path.exists() or not root_path.is_dir():
+        return {"ready": False, "reason": "root_not_directory", "root": str(root_path)}
+
+    project_root = find_project_root(root_path) or root_path
+    skip_reason = reasonix_auto_project_skip_reason(project_root)
+    if skip_reason:
+        return {
+            "ready": False,
+            "reason": skip_reason,
+            "root": str(project_root),
+        }
+
+    project_name = project or resolve_project_name(cwd=project_root)
+    hippo_dir = project_root / HIPPO_DIR_NAME
+    db_path = hippo_dir / HIPPO_DB_NAME
+    db_existed = db_path.exists()
+
+    try:
+        hippo_dir.mkdir(parents=True, exist_ok=True)
+        config_written = _ensure_project_config(project_root, project_name, force=False)
+        db = Database(db_path)
+        db.initialize()
+        db.insert_or_update_project(project_name, root_path=str(project_root))
+        has_indexed_files = _project_has_indexed_files(db, project_name)
+        should_index = index_project and (not db_existed or not has_indexed_files)
+        index_result = (
+            ProjectIndexer(db).index_project(project_root, project_name)
+            if should_index
+            else {"indexed_files": 0, "skipped_files": 0, "stale_files": 0}
+        )
+        try:
+            gitignore_updated = ensure_gitignore_entry(project_root, f"{HIPPO_DIR_NAME}/")
+        except OSError:
+            gitignore_updated = False
+    except Exception as exc:  # pragma: no cover - defensive shim bootstrap
+        return {
+            "ready": False,
+            "reason": "project_bootstrap_failed",
+            "error": str(exc),
+            "root": str(project_root),
+        }
+
+    return {
+        "ready": True,
+        "root": str(project_root),
+        "project": project_name,
+        "db_path": str(db_path),
+        "db_created": not db_existed,
+        "project_config_written": config_written,
+        "index": index_result,
+        "gitignore_updated": gitignore_updated,
+    }
+
+
+def reasonix_auto_project_skip_reason(root: str | Path) -> str | None:
+    root_path = Path(root).expanduser().resolve()
+    if not root_path.exists() or not root_path.is_dir():
+        return "root_not_directory"
+    if root_path.parent == root_path:
+        return "drive_root"
+    home = Path.home().resolve()
+    if root_path == home:
+        return "home_directory"
+    windir_raw = os.environ.get("WINDIR") or os.environ.get("SystemRoot")
+    if windir_raw:
+        windir = Path(windir_raw).expanduser().resolve()
+        if root_path == windir or windir in root_path.parents:
+            return "windows_system_directory"
+    return None
+
+
+def _project_has_indexed_files(db: Database, project: str) -> bool:
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM files WHERE project = ? AND status = 'active'",
+            (project,),
+        ).fetchone()
+    return bool(row and int(row[0]) > 0)
+
+
 def write_reasonix_status_file(
     output: str | Path,
     token_savings: dict[str, Any] | None,
@@ -273,12 +369,23 @@ def write_reasonix_status_file(
         path.write_text(
             json.dumps(
                 {
-                    "available": False,
+                    "available": True,
+                    "scope": "reasonix_session",
                     "run_id": run_id,
                     "project": project,
                     "session_ledger_dir": (
                         str(session_ledger_dir) if session_ledger_dir else None
                     ),
+                    "saved_tokens": 0,
+                    "session_saved_tokens": 0,
+                    "total_saved_tokens": 0,
+                    "project_total_saved_tokens": 0,
+                    "baseline_tokens": 0,
+                    "output_tokens": 0,
+                    "savings_ratio": 0.0,
+                    "average_savings_ratio": 0.0,
+                    "text": "",
+                    "reason": "no_token_savings_available",
                 },
                 ensure_ascii=False,
             ),
@@ -479,15 +586,19 @@ def install_reasonix_command_shims(bin_dir: str | Path | None = None) -> dict[st
     target.mkdir(parents=True, exist_ok=True)
     ps1_path = target / "reasonix.ps1"
     cmd_path = target / "reasonix.cmd"
+    sh_path = target / "reasonix"
     ps1_updated = _write_reasonix_shim_file(ps1_path, _reasonix_ps1_shim())
     cmd_updated = _write_reasonix_shim_file(cmd_path, _reasonix_cmd_shim())
+    sh_updated = _write_reasonix_shim_file(sh_path, _reasonix_sh_shim())
     status_bar_patch = patch_reasonix_status_bar(target)
     return {
         "bin_dir": str(target),
         "ps1": str(ps1_path),
         "cmd": str(cmd_path),
+        "sh": str(sh_path),
         "ps1_updated": ps1_updated,
         "cmd_updated": cmd_updated,
+        "sh_updated": sh_updated,
         "status_bar_patch": status_bar_patch,
     }
 
@@ -725,6 +836,22 @@ def _reasonix_cmd_shim() -> str:
         f"REM {REASONIX_SHIM_MARKER} v1\n"
         'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0reasonix.ps1" %*\n'
     )
+
+
+def _reasonix_sh_shim() -> str:
+    return f"""#!/bin/sh
+# {REASONIX_SHIM_MARKER} v1
+basedir=$(dirname "$(echo "$0" | sed -e 's,\\\\,/,g')")
+script="$basedir/reasonix.ps1"
+case `uname` in
+  *CYGWIN*|*MINGW*|*MSYS*)
+    if command -v cygpath > /dev/null 2>&1; then
+      script=`cygpath -w "$script"`
+    fi
+  ;;
+esac
+exec powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$script" "$@"
+"""
 
 
 def _reasonix_ps1_shim() -> str:

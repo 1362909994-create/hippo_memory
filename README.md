@@ -25,6 +25,11 @@ cd hippo_memory
 reasonix code D:\your_project
 ```
 
+完成一次全局 shim 安装后，之后也可以直接在其他项目目录运行 `reasonix` 或
+`reasonix code D:\another_project`。Reasonix 启动时会自动生成本轮 context/status；
+安全且可写的新项目目录会首次自动创建 `.hippo\hippo.db` 和 `.hippo.toml`，
+底部状态栏按 Reasonix 会话单独显示 `本轮` 和 `会话` token 节省。
+
 脚本会安装 `hippo`、部署项目记忆、配置 Reasonix MCP、安装全局 shim，并给 Reasonix 底部状态栏加上按会话统计的 token 节省显示。
 
 开发本项目时再使用 editable 安装：
@@ -56,6 +61,11 @@ pip install -e .[dev]
 ```powershell
 .\install-reasonix-hippo.ps1 -InstallPythonWithWinget
 ```
+
+全局 shim 会同时覆盖 npm 生成的 `reasonix.ps1`、`reasonix.cmd` 和无扩展名
+`reasonix` 三个启动入口。对 `C:\Windows`、磁盘根目录、用户 Home 这类不适合
+自动写项目文件的位置，不会创建 `.hippo`，但状态栏仍会从 0 显示，避免误以为
+集成没有生效。
 
 第一版为了 Windows 上稳定运行，没有强制安装 FAISS/Chroma 或 sentence-transformers。代码保留了 `EmbeddingBackend` 和 `VectorStore` 抽象，默认使用本地 hash embedding + SQLite JSON 向量降级实现；以后可以替换成 FAISS、Chroma、sentence-transformers、OpenAI 或本地模型。
 
