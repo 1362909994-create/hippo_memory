@@ -1,35 +1,143 @@
 # hippocampus-memory
 
-本地优先的 AI 外部记忆与 Reasonix 上下文压缩系统。
+`hippocampus-memory` is a local-first Memory OS runtime for AI coding agents.
 
-这个项目不是普通 RAG。它的目标不是“把很多文本塞进向量库再搜索”，而是为 AI coding CLI 提供可审计、短小、按项目隔离的工作记忆：项目现状、历史决策、约束、失败经验、代码地图、影响范围和压缩后的 Context Bundle。
+It is not a normal RAG project. The goal is not to dump large chat logs into a vector database and search them later. The goal is to give tools such as Reasonix, Codex, Claude Code, DeepSeek, and local agents a short, relevant, auditable working context for long-running software projects.
 
-当前版本重点面向 Reasonix。其他 CLI 仍保留通用能力，但产品化优先级低于 Reasonix 集成。
+The project started as an external memory and Reasonix context compression tool. It has now evolved into a staged Memory Runtime OS: CLI, MCP, and API memory execution paths enter `TurnOrchestrator.run_turn()`, then pass through decision, policy, scheduler, semantic, world-model, and cognitive-drive layers.
 
-## 当前状态
+## Status
 
-- 可用：本地 SQLite 记忆库、项目索引、Memory Pack、Project Profile、Code Map、Code Impact Pack、Context Bundle、自动存储、自动召回、轻量 MCP、Reasonix 一键部署。
-- 可选：`jieba`/`rapidfuzz` 质量增强、`tiktoken` 计数、`sentence-transformers`、Chroma、`basedpyright` 诊断。
-- 已知限制：Reasonix 状态栏里的 token 节省是“上下文压缩估算”，不是模型厂商账单实测。项目没有拦截 Reasonix 发给模型的真实请求，因此不能精确知道“如果不用 Hippo，这一轮真实会花多少 token”。
+The project is runnable and test-covered, but the OS-level runtime architecture is still experimental.
 
-## 适合谁
+Stable and usable today:
 
-- 经常用 Reasonix/Codex/Claude Code 做长周期项目的人。
-- 项目上下文、决策、失败经验经常被 AI 忘掉的人。
-- 想把“该读什么上下文”从手工复制粘贴变成自动调度的人。
-- 需要本地优先、默认不上传记忆的人。
+- Local SQLite memory store
+- Project-local memory isolation
+- Memory Pack
+- Project Profile
+- Code Map
+- Code Impact Pack
+- Context Bundle
+- Automatic recall
+- Automatic memory admission and candidate queue
+- CLI, lightweight MCP, and HTTP API entrypoints
+- Reasonix deployment helper, global shim, and status bar integration
+- Token savings estimation and per-session ledger
+- Turn Orchestrator routing for CLI/MCP/API memory flows
 
-如果你的任务只是短问答、一次性脚本、普通文档检索，本项目会显得过重。
+Implemented runtime architecture layers:
 
-## 安装
+- Turn Orchestrator
+- Turn Decision Graph
+- Adaptive Policy Engine
+- Policy Governance and drift guardrails
+- Multi-policy arbitration
+- Memory Scheduler
+- L0/L1/L2/L3 Memory Hierarchy
+- Semantic Memory Model
+- Memory World Model
+- Cognitive Drive Engine
 
-要求：
+Important boundary: the high-level OS, semantic, world-model, and cognitive-drive layers currently generate deterministic plans, reports, traces, and scheduler decisions. They do not silently mutate the memory database or launch uncontrolled background reasoning. This is intentional.
 
-- Windows PowerShell
+## Why This Exists
+
+AI coding agents still have practical memory problems:
+
+1. They forget project decisions, constraints, and failure history when the conversation gets long.
+2. Putting everything into the prompt wastes tokens and often hurts attention.
+3. Manual copy-paste context workflows do not scale across real projects.
+
+`hippocampus-memory` keeps durable project memory outside the model context, then injects only the compact context needed for the current task.
+
+The design target is closer to an agent memory runtime than a chatbot memory plugin.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    A[CLI / MCP / API / Reasonix] --> B[TurnOrchestrator.run_turn]
+    B --> C[Turn Decision Graph]
+    C --> D[Policy Engine / Policy Arbiter]
+    D --> E[Recall / Rank / Bundle / Writeback Adapters]
+    E --> F[Memory Scheduler]
+    F --> G[Memory Hierarchy L0-L3]
+    F --> H[Semantic Memory Layer]
+    H --> I[Memory World Model]
+    I --> J[Cognitive Drive Engine]
+    F --> K[Observability / Trace Reports]
+```
+
+Runtime flow:
+
+1. A CLI command, MCP tool call, API request, or Reasonix session starts a memory operation.
+2. `TurnOrchestrator.run_turn()` becomes the single memory runtime entrypoint.
+3. The decision graph decides whether to recall memory, use cache, inject context, skip memory, or fallback.
+4. Policy layers arbitrate recall, compression, latency, safety, and cost preferences.
+5. Existing core modules still perform retrieval, ranking, packing, context building, and memory admission.
+6. Scheduler, semantic, world-model, and cognitive-drive layers generate lifecycle plans, consistency reports, semantic fusion, reasoning propagation, and self-driven task proposals.
+7. The caller receives injected context plus structured trace data.
+
+Core memory modules are intentionally preserved:
+
+- `recall_policy.py`
+- `context_bundle.py`
+- `memory_policy.py`
+- `ranker.py`
+- `consolidator.py`
+
+The Memory OS layers wrap and coordinate these modules instead of replacing them.
+
+## Core Concepts
+
+### Memory Pack
+
+A compact task-focused memory packet. It prioritizes decisions, constraints, failures, task state, and verified facts. Private and sensitive memories are excluded by default.
+
+### Project Profile
+
+A project-level summary with project purpose, current state, indexed files, recent memories, risks, unknowns, and implementation notes.
+
+### Code Map
+
+A compact map generated from indexed project files. Python symbol/import/call extraction uses the standard library AST first. Other languages currently use fallback heuristics.
+
+### Code Impact Pack
+
+A change-planning context pack. It helps an agent reason about likely affected files, risks, invariants, and useful tests before editing code.
+
+### Context Bundle
+
+The main context artifact injected into Reasonix or other AI coding tools. It can combine Project Profile, Memory Pack, Code Impact Pack, and Code Map within a bounded token budget.
+
+### Turn Orchestrator
+
+The unified runtime entrypoint for memory operations. CLI, MCP, and API flows route through this layer so trace, selected memories, injected context, and writeback behavior stay consistent.
+
+### Memory Scheduler
+
+A cross-turn lifecycle planning layer for decay, promotion, compression, eviction, hierarchy assignment, policy alignment, semantic consistency, and optimization reports.
+
+### Memory World Model
+
+A semantic graph that maps memories into entities, concepts, decisions, events, and patterns. It supports semantic fusion, contradiction detection, reasoning propagation, and global cognitive state reporting.
+
+### Cognitive Drive Engine
+
+A deterministic self-drive layer. It can generate internal goals from memory state, allocate attention to conflicts and uncertainty, select memory-driven tasks, and propose self-triggering reasoning or consolidation loops.
+
+It does not autonomously rewrite long-term memory without explicit runtime integration.
+
+## Installation
+
+Requirements:
+
+- Windows PowerShell for the provided Reasonix installer
 - Python 3.11+
-- 已安装 Reasonix，并且 `reasonix` 在 PATH 中
+- Reasonix installed and available as `reasonix` on `PATH` if you want Reasonix integration
 
-一键安装并部署当前项目：
+Install and deploy for Reasonix:
 
 ```powershell
 git clone https://github.com/1362909994-create/hippo_memory.git
@@ -38,50 +146,61 @@ cd hippo_memory
 reasonix code D:\your_project
 ```
 
-安装脚本会做这些事：
-
-- 安装 `hippocampus-memory`
-- 给目标项目创建 `.hippo/hippo.db` 和 `.hippo.toml`
-- 索引项目文件摘要、符号、imports 和调用线索
-- 写入 Reasonix MCP 配置：`hippo_memory=hippo mcp-project`
-- 安装全局 Reasonix shim，让 `reasonix` 启动时自动注入 Hippo Context Bundle
-- 给 Reasonix 状态栏打补丁，显示会话级“预计节省”统计
-
-如果机器没有 Python 3.11+，可以让脚本尝试通过 winget 安装：
+If Python 3.11+ is missing, the installer can try winget:
 
 ```powershell
 .\install-reasonix-hippo.ps1 -InstallPythonWithWinget
 ```
 
-## 部署自检
+Developer install:
 
-部署后先跑一次只读诊断，确认项目库、Reasonix MCP 配置、全局 shim、状态栏补丁和全局提示块是否都在位：
+```powershell
+git clone https://github.com/1362909994-create/hippo_memory.git
+cd hippo_memory
+python -m pip install -e ".[quality,tokens]"
+```
+
+Optional extras:
+
+```powershell
+python -m pip install -e ".[semantic,chroma,lsp,quality,tokens]"
+```
+
+The default path does not require Chroma, sentence-transformers, or an online LLM.
+
+## Reasonix Deployment
+
+The one-command installer does the following:
+
+- Installs `hippocampus-memory`
+- Creates project-local `.hippo/hippo.db` and `.hippo.toml`
+- Indexes project files, summaries, symbols, imports, and calls
+- Adds `hippo_memory=hippo mcp-project` to Reasonix MCP config
+- Installs a global Reasonix shim
+- Generates a Context Bundle before `reasonix code ...`
+- Injects that bundle through Reasonix startup arguments
+- Patches the Reasonix status bar to show estimated Hippo token savings
+
+Deployment check:
 
 ```powershell
 hippo doctor --root D:\your_project
 hippo doctor --root D:\your_project --json
 ```
 
-`ready: true` 表示 Reasonix 自动注入路径基本齐全。`recommendations` 会告诉你缺的是 `reasonix-deploy`、`reasonix-install-shim`、状态栏补丁、PATH，还是 Reasonix 本身。
-如果 `--root` 指向项目子目录，doctor 会自动向上查找 `.hippo.toml` 或 `.hippo/hippo.db` 所在的项目根目录。
-
-## 卸载
-
-撤回这台机器上的 Reasonix/Hippo 集成：
+Uninstall Reasonix integration:
 
 ```powershell
 .\uninstall-reasonix-hippo.ps1 -ProjectRoot D:\your_project -RemoveProjectData -UninstallPackage
 ```
 
-它会恢复 Reasonix 原始启动文件和 UI bundle，移除 `~\.reasonix\config.json` 里的 `hippo_memory` MCP 项，移除 `~\.reasonix\REASONIX.md` 里的 Hippo 提示块，并可选删除目标项目的 `.hippo/` 和 `.reasonix/` 本地数据。
-
-默认不会修改项目里已跟踪的 `AGENTS.md`、`CLAUDE.md` 或 `REASONIX.md`。如果确实要移除项目提示块：
+Remove project prompt blocks as well:
 
 ```powershell
 .\uninstall-reasonix-hippo.ps1 -ProjectRoot D:\your_project -RemoveProjectMemory
 ```
 
-## 常用命令
+## Common Commands
 
 ```powershell
 hippo project-init my-project
@@ -99,126 +218,170 @@ hippo token-ledger --project my-project
 hippo doctor --root D:\your_project --json
 ```
 
-## Reasonix 工作方式
-
-部署后，Reasonix 启动流程大致是：
-
-1. 全局 `reasonix` shim 判断当前命令是否是 `reasonix code ...`。
-2. shim 找到当前项目目录，必要时自动创建最小 `.hippo` 项目库。
-3. `hippo reasonix-bootstrap-context` 根据当前项目生成短 Context Bundle。
-4. shim 通过 `--system-append-file` 把 Context Bundle 注入 Reasonix。
-5. Reasonix 里的 MCP 工具可按需调用 `hippo_memory_context_auto` 和 `hippo_memory_memory_auto_store`。
-6. 状态栏读取 Hippo status JSON，按 Reasonix 会话单独显示预计节省。
-
-状态栏统计口径：
-
-- 新 Reasonix 会话从 0 开始。
-- 打开旧 Reasonix 会话时，读取该会话自己的 ledger。
-- 只有 Reasonix 进入真实对话轮次后，才把本次 Context Bundle 的估算节省计入会话。
-- `预计节省` 是 `baseline_tokens - output_tokens`，其中 baseline 来自项目已索引记忆和文件摘要，output 是实际注入的 Context Bundle。
-- 这不是 DeepSeek/Reasonix 的精确账单值。
-
-## 核心产物
-
-### Memory Pack
-
-短上下文包，面向当前任务召回长期记忆。优先包含约束、决策、失败经验、任务状态和确认事实，默认排除 private/sensitive 记忆。
-
-### Project Profile
-
-项目级摘要，包括目标、当前状态、索引规模、功能概览、风险、未知点和最近记忆。
-
-### Code Map
-
-基于项目索引生成的代码地图，包含文件摘要、符号、imports 和相关 chunks。它不是完整 LSP，但足够给 AI 快速定位文件。
-
-### Code Impact Pack
-
-改代码前使用。根据当前 intent、项目索引、符号、调用线索和记忆，给出可能影响文件、风险、不变量、最小改动方向和建议测试。
-
-### Context Bundle
-
-组合 Project Profile、Memory Pack、Code Impact Pack 和 Code Map，是 Reasonix 自动注入的主要内容。
-
-## 自动存储和自动召回
-
-自动存储：
-
-- 高置信、非敏感的长期事实直接写入。
-- 中置信或敏感内容进入 candidate queue。
-- 闲聊、重复日志、低价值临时内容跳过。
-
-自动召回：
-
-- 小闲聊不召回。
-- 继续任务召回 compact callback pack。
-- 调试和代码修改召回 lean Context Bundle。
-- 项目综述召回 full Context Bundle。
-- 显式记忆查询召回 Memory Pack。
-
-## 数据和隐私
-
-- 默认使用本地 SQLite。
-- 默认不召回 private/sensitive 记忆。
-- 项目记忆按 project 隔离，不会自动混入其他项目。
-- 项目索引不复制完整源码，只存路径、hash、摘要、符号、imports、调用线索和 chunks。
-- LLM summarizer、Chroma、sentence-transformers 都是可选能力，默认路径不要求联网。
-
-## API 和 MCP
-
-HTTP API：
+Run the HTTP API:
 
 ```powershell
 hippo serve --host 127.0.0.1 --port 8765
 ```
 
-轻量 MCP：
+Run the lightweight JSON-RPC stdio MCP server:
 
 ```powershell
 hippo mcp
 hippo mcp-project
 ```
 
-当前 MCP 是 JSON-RPC stdio 轻量实现，工具语义已稳定，但还不是完整 MCP SDK 产品。
+## API and MCP Routing
 
-## 测试
+Memory-related CLI, MCP, and API entrypoints now route through `TurnOrchestrator.run_turn()`.
 
-本仓库当前测试覆盖：
+Every turn can produce:
 
-- 数据库 schema、CRUD、soft/hard delete
-- 检索、重排、去重、敏感过滤
-- Memory Pack、Context Bundle、Project Profile、Impact Pack
-- 项目索引、Python AST 符号提取、调用线索
-- 自动存储、自动召回策略
-- Reasonix 部署、shim、状态栏补丁、卸载恢复
-- CLI 行为、token ledger、安装脚本存在性
+- `injected_context`
+- `execution_trace`
+- `retrieved_memories`
+- `selected_memories`
+- `context_budget`
+- scheduler, semantic, world-model, and cognitive-drive reports
 
-运行：
+This keeps behavior consistent across CLI, MCP, and HTTP API without rewriting the existing retrieval and packing modules.
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest
-.\.venv\Scripts\python.exe -m ruff check hippocampus_memory tests
+## Token Savings
+
+Token savings are estimates, not provider billing values.
+
+Approximate formula:
+
+```text
+saved_tokens = baseline_tokens - injected_context_tokens
 ```
 
-## 路线图
+This means the compressed Context Bundle is shorter than a naive full-context approach. It does not mean DeepSeek, Reasonix, OpenAI, Anthropic, or any other provider charged exactly that many fewer tokens.
 
-优先级最高：
+Why it cannot be exact today:
 
-- 做真实 Reasonix 端到端 UI 测试。
-- 把 token 节省统计和项目 token ledger 分层，避免估算值被误解成账单值。
-- 建立更严谨的 memory admission gate，减少错误记忆进入上下文。
-- 扩展 eval benchmark，覆盖中文项目、长会话、多轮调试、敏感泄漏和冲突记忆。
+- Hippo does not intercept the final provider request body.
+- A true counterfactual prompt without Hippo is not available.
+- Different providers tokenize text differently.
+- Reasonix status bar integration is a UI patch, not a billing meter.
 
-中期：
+Use the status bar number as a compression signal, not an invoice.
 
-- 完整 MCP SDK 适配。
-- 更强的代码图和影响分析。
-- 对比 Mem0/Zep/Letta/PROJECTMEM 的公开 benchmark 设计自己的评测集。
+## Data and Privacy
 
-低优先级或应砍掉：
+- Default storage is local SQLite.
+- Memories are project-scoped by default.
+- Private and sensitive memories are not recalled by default.
+- Sensitive content should go through explicit user-controlled flows.
+- Project indexing stores paths, hashes, summaries, symbols, imports, calls, and chunks; it should not be treated as a full source-code backup.
+- Chroma, sentence-transformers, and LLM summarizers are optional capabilities.
 
-- 非 Reasonix CLI 的过早产品化。
-- 独立 browser/daemon 的重 UI 化。
-- 过多注入模式导致的维护面扩大。
+## Testing
 
-更完整的项目评估见 [docs/PROJECT_REPORT.md](docs/PROJECT_REPORT.md)。
+Current verification commands:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\ruff.exe check .
+```
+
+Latest verified result:
+
+```text
+170 passed
+All checks passed
+```
+
+Test coverage includes:
+
+- SQLite schema, CRUD, soft delete, hard delete
+- Memory writer and retriever behavior
+- Ranking, filtering, and deduplication
+- Memory Pack and Context Bundle generation
+- Project indexing and Python AST extraction
+- Project Profile, Code Map, Code Impact Pack
+- Automatic recall and automatic store policy
+- Candidate queue and conflict handling
+- Token report and token ledger
+- Reasonix deploy, shim, status patch, and uninstall helpers
+- Turn Orchestrator
+- Decision Policy Engine
+- Entrypoint routing through orchestrator
+- Memory Scheduler
+- Semantic model, world model, and cognitive drive layer
+
+Known test gaps:
+
+- Real Reasonix UI end-to-end automation
+- Fresh Windows install matrix
+- Long-session multi-project Reasonix resume testing
+- Large-scale memory benchmark
+- Real provider billing comparison
+- Full MCP SDK compatibility testing
+
+## What This Is Not
+
+This project is not:
+
+- A general-purpose vector database UI
+- A hosted memory SaaS
+- A replacement for source control
+- A precise token billing system
+- A fully autonomous agent that rewrites its memory without supervision
+- A complete language server or exact whole-program call graph
+
+It is a local memory runtime for AI coding workflows.
+
+## Comparison With Related Systems
+
+Compared with generic RAG:
+
+- Hippo focuses on compact working context, not large-document Q&A.
+- It prioritizes project memory, decisions, failures, constraints, and code impact.
+- It treats memory admission, compression, decay, conflict, and traceability as first-class concerns.
+
+Compared with hosted memory systems such as Mem0, Zep, or Letta-style agent memory:
+
+- Hippo is local-first and coding-workflow-specific.
+- Its core artifact is the Context Bundle / Memory Pack rather than a chat memory response.
+- Its current strongest integration target is Reasonix and local AI coding CLIs.
+- It is less mature as a hosted product and has fewer production integrations.
+
+## Roadmap
+
+Highest priority:
+
+- Real Reasonix UI E2E tests
+- Stronger memory admission gate
+- Better benchmark datasets for recall quality
+- Safer token savings presentation
+- Full MCP SDK adapter while preserving current tool semantics
+- Better documentation for scheduler, world model, and cognitive drive reports
+
+Medium priority:
+
+- More robust code graph and impact analysis
+- Better cross-project isolation and migration tools
+- Policy explainability UI or report command
+- Larger performance benchmark across many memories and large repos
+
+Lower priority or likely to cut:
+
+- Heavy standalone browser UI
+- Early productization for every non-Reasonix CLI
+- Complex background daemons before core memory quality is proven
+- Integrations that require intercepting provider secrets or final request bodies
+
+## Development Principles
+
+- Do not turn the project into ordinary RAG.
+- Do not recall private or sensitive memories by default.
+- Do not write uncertain memories directly into long-term memory.
+- Keep Memory Pack and Context Bundle short, stable, and auditable.
+- Preserve backward compatibility for CLI, MCP, API, and database migrations.
+- Keep optional heavy dependencies optional.
+- Prefer reversible orchestration layers over blind rewrites of core memory logic.
+
+## License
+
+No license file is currently included. Add one before publishing this as a reusable public package.
