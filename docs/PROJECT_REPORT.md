@@ -483,3 +483,32 @@ saved_tokens = baseline_tokens - output_tokens
 - 从项目子目录运行 doctor，确认能回到项目根目录判断部署状态。
 - 临时目录模拟缺失部署，确认 doctor 不写入任何文件并给出修复建议。
 - CLI `hippo doctor --json` 输出可被稳定解析。
+
+## 16. 本轮测试驱动优化：CLI 功能矩阵和坏路径体验
+
+本轮新增 `tests/test_cli_feature_matrix.py`，目标不是追求单个函数覆盖率，而是模拟真实用户连续使用：
+
+- 全部 CLI 命令都能正常渲染 `--help`。
+- 从 `project-init`、`index-project`、`write`、`search` 到 `pack`、`auto-context`、`callback`、`project-profile`、`code-map`、`code-graph`、`code-symbols`、`code-references`、`code-intelligence`、`impact`、`run`、`token-report`、`token-ledger` 连续跑通。
+- 覆盖候选队列、候选接受、冲突检测、冲突解决、记忆 supersede、forget、browser 报告、MCP config、daemon script、eval benchmark。
+- 覆盖 CLI 坏路径，要求用户输入错误时返回 Typer 可读错误，而不是 Python traceback。
+
+多轮测试和上手体验后修复的问题：
+
+- `auto-store --mode nope` 原来会抛 Python traceback；现在返回正常 CLI 参数错误。
+- `hippo run --inject file` 缺少子命令时，原来会先构建上下文并写 token ledger，甚至可能撞到只读数据库；现在先校验命令再执行。
+- `hippo run --bundle-strategy nope` 原来会从 ContextBundleBuilder 抛 traceback；现在在 CLI 层提前报错。
+- `hippo index-project <missing>` 原来会抛 traceback，尤其是未传 `--project` 时会在项目名解析阶段失败；现在返回正常 CLI 参数错误。
+
+验证结果：
+
+- `tests/test_cli_feature_matrix.py` 通过。
+- 全量测试从 114 项增加到 118 项并全部通过。
+- `ruff check hippocampus_memory tests` 通过。
+
+仍未覆盖的测试：
+
+- 真实 Reasonix TUI 端到端截图/终端录制测试。
+- 跨 Reasonix 版本 bundle patch 兼容性矩阵。
+- 真实模型请求 token/cost 对账。
+- fresh Windows 机器上的一键安装 CI。

@@ -205,18 +205,21 @@ def auto_store(
     else:
         raise typer.BadParameter("--text or --path is required")
     resolved = resolve_project_name(project) if project is not None else None
-    typer.echo(
-        auto_store_memories(
-            get_db(),
-            raw_text,
-            project=resolved,
-            source=source,
-            mode=mode,
-            max_candidates=max_candidates,
-            allow_sensitive=allow_sensitive,
-            dry_run=dry_run,
+    try:
+        typer.echo(
+            auto_store_memories(
+                get_db(),
+                raw_text,
+                project=resolved,
+                source=source,
+                mode=mode,
+                max_candidates=max_candidates,
+                allow_sensitive=allow_sensitive,
+                dry_run=dry_run,
+            )
         )
-    )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 @app.command("auto-context")
@@ -421,6 +424,8 @@ def run(
     token_model: str | None = typer.Option(None, "--token-model"),
 ) -> None:
     """Generate context and optionally launch another AI coding command with it."""
+    command = list(ctx.args)
+    _validate_run_request(inject, command, bundle_strategy)
     db = get_db()
     project_name = resolve_project_name(project, cwd=cwd)
     context = ContextBundleBuilder(db).build(
@@ -441,7 +446,7 @@ def run(
     )
     try:
         result = run_with_context(
-            command=list(ctx.args),
+            command=command,
             context=context,
             project=project_name,
             intent=intent,
@@ -458,7 +463,7 @@ def run(
             db,
             project=project_name,
             intent=intent,
-            command=list(ctx.args),
+            command=command,
             returncode=result.returncode,
             context_file=result.context_file,
             stdout=result.stdout,
@@ -675,8 +680,16 @@ def browser_report(
 @app.command("index-project")
 def index_project(path: Path, project: str | None = typer.Option(None, "--project")) -> None:
     """Index a local project folder."""
-    project = resolve_project_name(project, cwd=path)
-    result = ProjectIndexer(get_db()).index_project(path, project)
+    root = path.expanduser()
+    if not root.exists() or not root.is_dir():
+        raise typer.BadParameter(
+            f"project path does not exist or is not a directory: {root}"
+        )
+    project = resolve_project_name(project, cwd=root)
+    try:
+        result = ProjectIndexer(get_db()).index_project(root, project)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     typer.echo(result)
 
 
@@ -803,6 +816,17 @@ def project_summary(project: str = typer.Option(..., "--project")) -> None:
 def stats() -> None:
     """Print database stats."""
     typer.echo(get_db().stats())
+
+
+def _validate_run_request(inject: str, command: list[str], bundle_strategy: str) -> None:
+    normalized = inject.strip().casefold()
+    if normalized not in {"print", "file", "env", "stdin", "arg"}:
+        raise typer.BadParameter(f"unsupported inject mode: {inject}")
+    strategy = bundle_strategy.strip().casefold()
+    if strategy not in {"auto", "full", "lean", "pack"}:
+        raise typer.BadParameter("strategy must be one of: auto, full, lean, pack")
+    if normalized != "print" and not command:
+        raise typer.BadParameter("a command is required unless --inject print is used")
 
 
 def _project_root_path(db: Database, project: str) -> Path | None:
