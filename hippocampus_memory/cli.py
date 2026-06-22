@@ -6,13 +6,12 @@ from pathlib import Path
 
 import typer
 
-from hippocampus_memory.callback import callback_pack, reset_callback_pack
+from hippocampus_memory.callback import reset_callback_pack
 from hippocampus_memory.change_planner import ChangePlanner
 from hippocampus_memory.code_graph import CodeGraphBuilder
 from hippocampus_memory.code_intelligence import CodeIntelligence
 from hippocampus_memory.code_map import CodeMapBuilder
 from hippocampus_memory.consolidator import Consolidator
-from hippocampus_memory.context_bundle import ContextBundleBuilder
 from hippocampus_memory.db import Database
 from hippocampus_memory.deploy import (
     deploy_reasonix,
@@ -28,17 +27,12 @@ from hippocampus_memory.deploy import (
 from hippocampus_memory.evaluator import evaluate_retrieval
 from hippocampus_memory.lsp_diagnostics import run_python_diagnostics
 from hippocampus_memory.mcp_server import serve_stdio
-from hippocampus_memory.memory_policy import auto_store_memories
 from hippocampus_memory.memory_writer import MemoryWriter
-from hippocampus_memory.models import MemoryRecord
-from hippocampus_memory.packer import MemoryPacker
+from hippocampus_memory.orchestrator import TurnOrchestrator
 from hippocampus_memory.project_indexer import ProjectIndexer
 from hippocampus_memory.project_profile import ProjectProfileBuilder
 from hippocampus_memory.project_resolver import resolve_project_name, write_project_config
-from hippocampus_memory.ranker import RANKER_VERSION, explain_memory_score
-from hippocampus_memory.recall_policy import build_auto_context
 from hippocampus_memory.report import write_memory_browser
-from hippocampus_memory.retriever import Retriever
 from hippocampus_memory.runner import run_with_context
 from hippocampus_memory.session_ingestor import (
     accept_candidate,
@@ -54,7 +48,6 @@ from hippocampus_memory.token_report import (
     token_ledger_report,
     token_savings_report,
 )
-from hippocampus_memory.utils import tokenize
 
 app = typer.Typer(help="Local-first external memory for AI agents.")
 
@@ -137,16 +130,21 @@ def search(
     dedupe: bool = typer.Option(True, "--dedupe/--no-dedupe"),
 ) -> None:
     """Search memories."""
-    results = Retriever(get_db()).search(
-        query=query,
-        project=project,
-        top_k=top_k,
-        search_mode=mode,
-        entities=entity or None,
-        tags=tag or None,
-        dedupe_results=dedupe,
+    turn = TurnOrchestrator(get_db()).run_turn(
+        query,
+        context={
+            "operation": "memory_search",
+            "project": project,
+            "top_k": top_k,
+            "search_mode": mode,
+            "entities": entity or None,
+            "tags": tag or None,
+            "dedupe_results": dedupe,
+            "writeback": False,
+        },
+        mode="preview",
     )
-    for result in results:
+    for result in turn.turn_context.selected_memories:
         typer.echo(
             f"[{result.score:.3f}] {result.memory_type} {result.memory_id}: {result.content}"
         )
@@ -159,31 +157,24 @@ def explain(
     query: str | None = typer.Option(None, "--query"),
 ) -> None:
     """Explain why one memory would be recalled and how it is scored."""
-    db = get_db()
-    memory = db.get_memory(memory_id)
-    if memory is None:
-        raise typer.BadParameter(f"memory not found: {memory_id}")
-    scoring_project = resolve_project_name(project) if project is not None else memory.project
-    explanation = explain_memory_score(
-        memory,
-        keyword_score=_memory_keyword_score(query or "", memory),
-        project=scoring_project,
-    )
-    typer.echo(
-        {
-            "memory_id": memory.id,
-            "project": memory.project,
-            "memory_type": memory.memory_type,
-            "status": memory.status,
-            "visibility": memory.visibility,
-            "importance": memory.importance,
-            "confidence": memory.confidence,
-            "score": explanation.score,
-            "why_recalled": explanation.reason,
-            "score_details": explanation.factors,
-            "ranker_version": RANKER_VERSION,
-        }
-    )
+    scoring_project = resolve_project_name(project) if project is not None else None
+    try:
+        result = TurnOrchestrator(get_db()).run_turn(
+            query or memory_id,
+            context={
+                "operation": "memory_explain",
+                "memory_id": memory_id,
+                "project": scoring_project,
+                "query": query,
+                "writeback": False,
+            },
+            mode="preview",
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    payload = dict(result.recall_payload)
+    payload.pop("decision", None)
+    typer.echo(payload)
 
 
 @app.command()
@@ -201,15 +192,21 @@ def pack(
     """Generate a Memory Pack for an agent."""
     project = resolve_project_name(project)
     db = get_db()
-    text = MemoryPacker(db).pack(
-        query=query,
-        project=project,
-        max_tokens=max_tokens,
-        source_chunk_limit=source_chunk_limit,
-        compact=compact,
-        exclude_memory_ids=exclude_memory_id or None,
-        session_dedupe=session_dedupe,
+    turn = TurnOrchestrator(db).run_turn(
+        query,
+        context={
+            "operation": "memory_pack",
+            "project": project,
+            "max_tokens": max_tokens,
+            "source_chunk_limit": source_chunk_limit,
+            "compact": compact,
+            "exclude_memory_ids": exclude_memory_id,
+            "session_dedupe": session_dedupe,
+            "writeback": False,
+        },
+        mode="preview",
     )
+    text = turn.injected_context
     _echo_token_savings(
         db,
         project=project,
@@ -242,18 +239,21 @@ def auto_store(
         raise typer.BadParameter("--text or --path is required")
     resolved = resolve_project_name(project) if project is not None else None
     try:
-        typer.echo(
-            auto_store_memories(
-                get_db(),
-                raw_text,
-                project=resolved,
-                source=source,
-                mode=mode,
-                max_candidates=max_candidates,
-                allow_sensitive=allow_sensitive,
-                dry_run=dry_run,
-            )
+        turn = TurnOrchestrator(get_db()).run_turn(
+            raw_text,
+            context={
+                "operation": "memory_auto_store",
+                "project": resolved,
+                "source": source,
+                "store_mode": mode,
+                "max_candidates": max_candidates,
+                "allow_sensitive": allow_sensitive,
+                "dry_run": dry_run,
+                "writeback": False,
+            },
+            mode="preview" if dry_run or mode == "preview" else "write",
         )
+        typer.echo(turn.memory_writeback)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
@@ -272,25 +272,22 @@ def auto_context(
     """Automatically decide whether and how to recall external memory."""
     resolved = resolve_project_name(project) if project is not None else None
     db = get_db()
-    result = build_auto_context(
-        db,
-        intent=intent,
-        project=resolved,
-        session_key=session,
-        max_tokens=max_tokens,
-        include_code_map=include_code_map,
+    turn = TurnOrchestrator(db).run_turn(
+        intent,
+        context={
+            "operation": "auto_context",
+            "project": resolved,
+            "session_key": session,
+            "max_tokens": max_tokens,
+            "include_code_map": include_code_map,
+            "track_token_savings": token_stats and resolved is not None,
+            "token_model": token_model,
+        },
+        mode="preview",
     )
-    token_report = _echo_token_savings(
-        db,
-        project=resolved,
-        intent=intent,
-        context_type=str(result["decision"]["action"]),
-        output_text=str(result["text"]),
-        enabled=token_stats and resolved is not None and result["decision"]["action"] != "none",
-        model=token_model,
-    )
-    if token_report is not None:
-        result["token_savings"] = token_report
+    result = turn.runtime_payload()
+    if result.get("token_savings_text"):
+        typer.echo(result["token_savings_text"], err=True)
     typer.echo(result if metadata else result["text"])
 
 
@@ -306,15 +303,20 @@ def callback(
 ) -> None:
     """Generate a project-scoped callback pack and remember injected memories."""
     project = resolve_project_name(project)
-    result = callback_pack(
-        get_db(),
-        project=project,
-        intent=intent,
-        session_key=session,
-        max_tokens=max_tokens,
-        source_chunk_limit=source_chunk_limit,
-        compact=compact,
+    turn = TurnOrchestrator(get_db()).run_turn(
+        intent,
+        context={
+            "operation": "context_callback",
+            "project": project,
+            "session_key": session,
+            "max_tokens": max_tokens,
+            "source_chunk_limit": source_chunk_limit,
+            "compact": compact,
+            "writeback": False,
+        },
+        mode="preview",
     )
+    result = turn.runtime_payload()
     typer.echo(result if metadata else result["pack"])
 
 
@@ -464,13 +466,19 @@ def run(
     _validate_run_request(inject, command, bundle_strategy)
     db = get_db()
     project_name = resolve_project_name(project, cwd=cwd)
-    context = ContextBundleBuilder(db).build(
-        project=project_name,
-        intent=intent,
-        max_tokens=max_tokens,
-        include_code_map=include_code_map,
-        strategy=bundle_strategy,
+    turn = TurnOrchestrator(db).run_turn(
+        intent,
+        context={
+            "operation": "context_bundle",
+            "project": project_name,
+            "max_tokens": max_tokens,
+            "include_code_map": include_code_map,
+            "bundle_strategy": bundle_strategy,
+            "writeback": False,
+        },
+        mode="preview",
     )
+    context = turn.injected_context
     _echo_token_savings(
         db,
         project=project_name,
@@ -868,25 +876,6 @@ def _project_root_path(db: Database, project: str) -> Path | None:
     if not record or not record.get("root_path"):
         return None
     return Path(str(record["root_path"]))
-
-
-def _memory_keyword_score(query: str, memory: MemoryRecord) -> float:
-    query_tokens = set(tokenize(query))
-    if not query_tokens:
-        return 0.0
-    haystack = " ".join(
-        [
-            memory.content,
-            memory.summary or "",
-            " ".join(memory.entities),
-            " ".join(memory.tags),
-            memory.project or "",
-        ]
-    )
-    memory_tokens = set(tokenize(haystack))
-    if not memory_tokens:
-        return 0.0
-    return min(1.0, len(query_tokens & memory_tokens) / max(1, len(query_tokens)))
 
 
 def _echo_token_savings(

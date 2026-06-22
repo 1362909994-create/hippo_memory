@@ -12,13 +12,10 @@ from hippocampus_memory.config import Settings
 from hippocampus_memory.consolidator import Consolidator
 from hippocampus_memory.db import Database
 from hippocampus_memory.lsp_diagnostics import run_python_diagnostics
-from hippocampus_memory.memory_policy import auto_store_memories
 from hippocampus_memory.memory_writer import MemoryWriter
-from hippocampus_memory.packer import MemoryPacker
+from hippocampus_memory.orchestrator import TurnOrchestrator
 from hippocampus_memory.project_indexer import ProjectIndexer
 from hippocampus_memory.project_profile import ProjectProfileBuilder
-from hippocampus_memory.recall_policy import build_auto_context
-from hippocampus_memory.retriever import Retriever
 from hippocampus_memory.schemas import (
     AutoContextRequest,
     AutoStoreRequest,
@@ -77,25 +74,76 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/memory/search", response_model=MemorySearchResponse)
     def search_memory(payload: MemorySearchRequest) -> MemorySearchResponse:
-        results = Retriever(db).search(**payload.model_dump())
-        items = [MemorySearchItem(**asdict(result)) for result in results]
-        return MemorySearchResponse(results=items)
+        turn = TurnOrchestrator(db).run_turn(
+            payload.query,
+            context={
+                **payload.model_dump(),
+                "operation": "memory_search",
+                "writeback": False,
+            },
+            mode="preview",
+        )
+        runtime = turn.runtime_payload()
+        results = [MemorySearchItem(**item) for item in runtime["results"]]
+        retrieved = [MemorySearchItem(**item) for item in runtime["retrieved_memories"]]
+        selected = [MemorySearchItem(**item) for item in runtime["selected_memories"]]
+        return MemorySearchResponse(
+            results=results,
+            injected_context=runtime["injected_context"],
+            execution_trace=runtime["execution_trace"],
+            retrieved_memories=retrieved,
+            selected_memories=selected,
+            context_budget=runtime["context_budget"],
+        )
 
     @app.post("/memory/pack", response_model=MemoryPackResponse)
     def pack_memory(payload: MemoryPackRequest) -> MemoryPackResponse:
-        pack = MemoryPacker(db).pack(**payload.model_dump())
-        return MemoryPackResponse(pack=pack)
+        turn = TurnOrchestrator(db).run_turn(
+            payload.query,
+            context={
+                **payload.model_dump(),
+                "operation": "memory_pack",
+                "writeback": False,
+            },
+            mode="preview",
+        )
+        runtime = turn.runtime_payload()
+        retrieved = [MemorySearchItem(**item) for item in runtime["retrieved_memories"]]
+        selected = [MemorySearchItem(**item) for item in runtime["selected_memories"]]
+        return MemoryPackResponse(
+            pack=turn.injected_context,
+            injected_context=runtime["injected_context"],
+            execution_trace=runtime["execution_trace"],
+            retrieved_memories=retrieved,
+            selected_memories=selected,
+            context_budget=runtime["context_budget"],
+        )
 
     @app.post("/memory/auto-store")
     def auto_store(payload: AutoStoreRequest) -> dict:
         try:
-            return auto_store_memories(db, **payload.model_dump())
+            turn = TurnOrchestrator(db).run_turn(
+                payload.text,
+                context={
+                    **payload.model_dump(),
+                    "operation": "memory_auto_store",
+                    "store_mode": payload.mode,
+                    "writeback": False,
+                },
+                mode="preview" if payload.dry_run or payload.mode == "preview" else "write",
+            )
+            return turn.runtime_payload()
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/context/auto")
     def auto_context(payload: AutoContextRequest) -> dict:
-        return build_auto_context(db, **payload.model_dump())
+        turn = TurnOrchestrator(db).run_turn(
+            payload.intent,
+            context={**payload.model_dump(), "operation": "auto_context"},
+            mode="preview",
+        )
+        return turn.runtime_payload()
 
     @app.post("/memory/consolidate")
     def consolidate(payload: ConsolidateRequest) -> dict:
@@ -108,8 +156,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return {"deleted": deleted, "hard": payload.hard}
         if not payload.memory_id:
             raise HTTPException(status_code=400, detail="memory_id or project is required")
-        ok = db.delete_memory(payload.memory_id) if payload.hard else db.update_memory_status(
-            payload.memory_id, "deleted"
+        ok = (
+            db.delete_memory(payload.memory_id)
+            if payload.hard
+            else db.update_memory_status(payload.memory_id, "deleted")
         )
         return {"deleted": 1 if ok else 0, "hard": payload.hard}
 

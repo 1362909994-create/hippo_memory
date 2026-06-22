@@ -62,6 +62,11 @@ class MemorySearchItem(BaseModel):
 
 class MemorySearchResponse(BaseModel):
     results: list[MemorySearchItem]
+    injected_context: str | None = None
+    execution_trace: list[dict[str, Any]] = Field(default_factory=list)
+    retrieved_memories: list[MemorySearchItem] = Field(default_factory=list)
+    selected_memories: list[MemorySearchItem] = Field(default_factory=list)
+    context_budget: dict[str, Any] = Field(default_factory=dict)
 
 
 class MemoryPackRequest(BaseModel):
@@ -77,6 +82,11 @@ class MemoryPackRequest(BaseModel):
 
 class MemoryPackResponse(BaseModel):
     pack: str
+    injected_context: str | None = None
+    execution_trace: list[dict[str, Any]] = Field(default_factory=list)
+    retrieved_memories: list[MemorySearchItem] = Field(default_factory=list)
+    selected_memories: list[MemorySearchItem] = Field(default_factory=list)
+    context_budget: dict[str, Any] = Field(default_factory=dict)
 
 
 class TextPackResponse(BaseModel):

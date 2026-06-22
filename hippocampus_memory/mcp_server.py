@@ -6,21 +6,15 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from hippocampus_memory.callback import callback_pack
 from hippocampus_memory.change_planner import ChangePlanner
 from hippocampus_memory.code_intelligence import CodeIntelligence
 from hippocampus_memory.code_map import CodeMapBuilder
-from hippocampus_memory.context_bundle import ContextBundleBuilder
 from hippocampus_memory.db import Database
 from hippocampus_memory.lsp_diagnostics import run_python_diagnostics
-from hippocampus_memory.memory_policy import auto_store_memories
 from hippocampus_memory.memory_writer import MemoryWriter
-from hippocampus_memory.models import SearchResult
-from hippocampus_memory.packer import MemoryPacker
+from hippocampus_memory.orchestrator import TurnOrchestrator
 from hippocampus_memory.project_profile import ProjectProfileBuilder
-from hippocampus_memory.recall_policy import build_auto_context
-from hippocampus_memory.retriever import Retriever
-from hippocampus_memory.utils import dumps_json, normalize_text
+from hippocampus_memory.utils import dumps_json
 
 TOOLS: dict[str, dict[str, Any]] = {
     "memory.write": {
@@ -280,16 +274,36 @@ class HippoMcpServer:
             result = MemoryWriter(self.db).write(**arguments)
             return {"memory_id": result.memory_id, "created": result.created}
         if name == "memory.search":
-            results = Retriever(self.db).search(**arguments)
-            return {
-                "text": _format_search_results(results),
-                "results": [asdict(item) for item in results],
-            }
+            arguments = self._with_default_project(arguments)
+            turn = TurnOrchestrator(self.db).run_turn(
+                str(arguments["query"]),
+                context={**arguments, "operation": "memory_search", "writeback": False},
+                mode="preview",
+            )
+            return turn.runtime_payload()
         if name == "memory.pack":
-            return {"text": MemoryPacker(self.db).pack(**arguments)}
+            arguments = self._with_default_project(arguments)
+            turn = TurnOrchestrator(self.db).run_turn(
+                str(arguments["query"]),
+                context={**arguments, "operation": "memory_pack", "writeback": False},
+                mode="preview",
+            )
+            return turn.runtime_payload()
         if name == "memory.auto_store":
             arguments = self._with_default_project(arguments)
-            return auto_store_memories(self.db, **arguments)
+            store_mode = str(arguments.get("mode", "auto"))
+            dry_run = bool(arguments.get("dry_run", False))
+            turn = TurnOrchestrator(self.db).run_turn(
+                str(arguments["text"]),
+                context={
+                    **arguments,
+                    "operation": "memory_auto_store",
+                    "store_mode": store_mode,
+                    "writeback": False,
+                },
+                mode="preview" if dry_run or store_mode == "preview" else "write",
+            )
+            return turn.runtime_payload()
         if name == "project.profile":
             return {"text": ProjectProfileBuilder(self.db).build(str(arguments["project"]))}
         if name == "project.impact":
@@ -339,17 +353,39 @@ class HippoMcpServer:
                 "diagnostics": [asdict(diagnostic) for diagnostic in result["diagnostics"]],
             }
         if name == "context.bundle":
-            return {"text": ContextBundleBuilder(self.db).build(**arguments)}
+            arguments = self._with_default_project(arguments)
+            turn = TurnOrchestrator(self.db).run_turn(
+                str(arguments["intent"]),
+                context={
+                    **arguments,
+                    "operation": "context_bundle",
+                    "bundle_strategy": arguments.get("strategy", "auto"),
+                    "writeback": False,
+                },
+                mode="preview",
+            )
+            return turn.runtime_payload()
         if name == "context.auto":
             arguments = self._with_default_project(arguments)
-            return build_auto_context(
-                self.db,
-                **arguments,
-                track_token_savings=True,
-                include_savings_in_text=True,
+            turn = TurnOrchestrator(self.db).run_turn(
+                str(arguments["intent"]),
+                context={
+                    **arguments,
+                    "operation": "auto_context",
+                    "track_token_savings": True,
+                    "include_savings_in_text": True,
+                },
+                mode="preview",
             )
+            return turn.runtime_payload()
         if name == "context.callback":
-            return callback_pack(self.db, **arguments)
+            arguments = self._with_default_project(arguments)
+            turn = TurnOrchestrator(self.db).run_turn(
+                str(arguments["intent"]),
+                context={**arguments, "operation": "context_callback", "writeback": False},
+                mode="preview",
+            )
+            return turn.runtime_payload()
         if name == "candidate.list":
             return {
                 "candidates": self.db.list_candidates(
@@ -405,41 +441,6 @@ def _tool_result(payload: Any) -> dict[str, Any]:
         "content": [{"type": "text", "text": text}],
         "structuredContent": payload,
     }
-
-
-def _format_search_results(results: list[SearchResult], max_items: int = 8) -> str:
-    lines = ["Memory Search Results:"]
-    if not results:
-        lines.append("1. No matching memory found.")
-        return "\n".join(lines)
-    seen_texts: set[str] = set()
-    shown = 0
-    omitted = 0
-    for result in results:
-        summary = result.summary or result.content
-        key = normalize_text(summary).casefold()
-        if key in seen_texts:
-            omitted += 1
-            continue
-        seen_texts.add(key)
-        shown += 1
-        lines.append(
-            f"{shown}. [{result.memory_type} score={result.score:.2f}] "
-            f"{_short_text(summary)}"
-        )
-        if shown >= max_items:
-            break
-    omitted += max(0, len(results) - shown - omitted)
-    if omitted:
-        lines.append(f"... {omitted} duplicate/extra result(s) omitted.")
-    return "\n".join(lines)
-
-
-def _short_text(text: str, limit: int = 260) -> str:
-    normalized = normalize_text(text)
-    if len(normalized) <= limit:
-        return normalized
-    return normalized[: limit - 3].rstrip() + "..."
 
 
 def _project_root_path(db: Database, project: str) -> str | None:
