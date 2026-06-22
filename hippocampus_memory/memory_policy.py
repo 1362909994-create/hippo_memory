@@ -6,7 +6,7 @@ from typing import Any
 
 from hippocampus_memory.db import Database
 from hippocampus_memory.memory_writer import MemoryWriter
-from hippocampus_memory.models import MemoryVisibility
+from hippocampus_memory.models import MemoryRecord, MemoryVisibility
 from hippocampus_memory.sensitive import is_sensitive_text
 from hippocampus_memory.utils import normalize_text, text_similarity
 
@@ -14,6 +14,7 @@ POLICY_VERSION = "auto-memory-v1"
 
 WRITE_SCORE_THRESHOLD = 0.74
 QUEUE_SCORE_THRESHOLD = 0.56
+NEAR_EXISTING_MEMORY_SIMILARITY = 0.90
 
 
 @dataclass(slots=True)
@@ -95,6 +96,7 @@ def auto_store_memories(
         allow_sensitive=allow_sensitive,
     )
     writer = MemoryWriter(db)
+    existing_memories = db.list_memories(project=project, limit=500)
     items: list[dict[str, Any]] = []
     written = 0
     queued = 0
@@ -109,7 +111,15 @@ def auto_store_memories(
             "outcome": "preview" if dry_run else target_action,
             "memory_id": None,
             "candidate_id": None,
+            "duplicate_memory_id": None,
         }
+        near_duplicate_id = _near_existing_memory_id(decision, existing_memories)
+        if target_action in {"write", "queue"} and near_duplicate_id is not None:
+            duplicates += 1
+            item["outcome"] = "near_duplicate"
+            item["duplicate_memory_id"] = near_duplicate_id
+            items.append(item)
+            continue
         if dry_run:
             previewed += 1
             items.append(item)
@@ -358,6 +368,18 @@ def _target_action(
             return "queue"
         return "write"
     return decision.action
+
+
+def _near_existing_memory_id(
+    decision: MemoryAdmissionDecision,
+    existing_memories: list[MemoryRecord],
+) -> str | None:
+    for memory in existing_memories:
+        if memory.memory_type != decision.memory_type:
+            continue
+        if text_similarity(decision.content, memory.content) >= NEAR_EXISTING_MEMORY_SIMILARITY:
+            return memory.id
+    return None
 
 
 def _normalize_mode(mode: str) -> str:

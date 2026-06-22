@@ -3,7 +3,7 @@ from __future__ import annotations
 from hippocampus_memory.memory_writer import MemoryWriter
 from hippocampus_memory.models import MemoryRecord
 from hippocampus_memory.packer import MemoryPacker
-from hippocampus_memory.ranker import rank_memory
+from hippocampus_memory.ranker import explain_memory_score, rank_memory
 from hippocampus_memory.retriever import Retriever
 
 
@@ -240,3 +240,46 @@ def test_ranker_boosts_structured_memory_over_source_chunks():
     )
 
     assert constraint_score > chunk_score
+
+
+def test_ranker_exposes_score_breakdown():
+    memory = MemoryRecord(
+        id="mem_constraint",
+        content="Keep the storage schema stable.",
+        memory_type="constraint",
+        project="demo",
+        confidence=0.8,
+        importance=0.9,
+        status="active",
+        visibility="project",
+        usage_count=3,
+    )
+
+    explanation = explain_memory_score(
+        memory,
+        keyword_score=0.5,
+        semantic_score=0.25,
+        project="demo",
+    )
+
+    assert explanation.score > 0
+    assert "keyword=0.50" in explanation.reason
+    assert "project_match" in explanation.reason
+    assert explanation.factors["keyword"] == 0.5
+    assert explanation.factors["project_match"] == 1.0
+    assert explanation.factors["type_boost"] > 0
+
+
+def test_retriever_results_include_score_details(db):
+    MemoryWriter(db).write(
+        project="demo",
+        memory_type="constraint",
+        content="Search must explain why a memory was recalled.",
+        importance=0.9,
+    )
+
+    results = Retriever(db).search("explain recalled memory", project="demo")
+
+    assert results
+    assert results[0].score_details["keyword"] > 0
+    assert results[0].score_details["project_match"] == 1.0

@@ -1,9 +1,19 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from hippocampus_memory.models import MemoryRecord, MemoryStatus, MemoryType, MemoryVisibility
 from hippocampus_memory.utils import clamp
+
+RANKER_VERSION = "unified-memory-score-v2"
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryScoreExplanation:
+    score: float
+    reason: str
+    factors: dict[str, float]
 
 
 def rank_memory(
@@ -15,6 +25,26 @@ def rank_memory(
     include_private: bool = False,
     include_sensitive: bool = False,
 ) -> tuple[float, str]:
+    explanation = explain_memory_score(
+        memory,
+        keyword_score=keyword_score,
+        semantic_score=semantic_score,
+        project=project,
+        include_private=include_private,
+        include_sensitive=include_sensitive,
+    )
+    return explanation.score, explanation.reason
+
+
+def explain_memory_score(
+    memory: MemoryRecord,
+    *,
+    keyword_score: float = 0.0,
+    semantic_score: float = 0.0,
+    project: str | None = None,
+    include_private: bool = False,
+    include_sensitive: bool = False,
+) -> MemoryScoreExplanation:
     project_boost = 1.0 if project and memory.project == project else 0.0
     recency_score = _recency(memory.updated_at or memory.created_at)
     usage_score = min(1.0, memory.usage_count / 10.0)
@@ -44,6 +74,19 @@ def rank_memory(
         - status_penalty
         - visibility_penalty
     )
+    factors = {
+        "keyword": clamp(keyword_score, 0.0, 1.0),
+        "semantic": clamp(semantic_score, 0.0, 1.0),
+        "project_match": project_boost,
+        "importance": clamp(memory.importance),
+        "confidence": clamp(memory.confidence),
+        "recency": recency_score,
+        "usage": usage_score,
+        "type_boost": type_boost,
+        "status_penalty": status_penalty,
+        "visibility_penalty": visibility_penalty,
+        "raw_score": score,
+    }
     reasons = []
     if keyword_score:
         reasons.append(f"keyword={keyword_score:.2f}")
@@ -55,7 +98,15 @@ def rank_memory(
         reasons.append("high_importance")
     if type_boost > 0:
         reasons.append(f"type={memory.memory_type}")
-    return clamp(score, 0.0, 1.0), ", ".join(reasons) or "ranked_candidate"
+    if status_penalty:
+        reasons.append(f"status_penalty={status_penalty:.2f}")
+    if visibility_penalty:
+        reasons.append(f"visibility_penalty={visibility_penalty:.2f}")
+    return MemoryScoreExplanation(
+        score=clamp(score, 0.0, 1.0),
+        reason=", ".join(reasons) or "ranked_candidate",
+        factors=factors,
+    )
 
 
 def _type_boost(memory_type: str) -> float:

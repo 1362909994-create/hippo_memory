@@ -221,6 +221,38 @@ def test_cli_token_ledger_is_project_scoped(tmp_path, monkeypatch):
     assert "alpha" in ledger.output
 
 
+def test_cli_explain_memory_outputs_score_details(tmp_path, monkeypatch):
+    monkeypatch.setenv("HIPPO_DB_PATH", str(tmp_path / "explain.db"))
+    runner = CliRunner()
+
+    write = runner.invoke(
+        app,
+        [
+            "write",
+            "--project",
+            "alpha",
+            "--type",
+            "constraint",
+            "--content",
+            "Search must explain why a memory was recalled.",
+            "--importance",
+            "0.9",
+        ],
+    )
+    assert write.exit_code == 0
+    memory_id = write.output.strip()
+
+    explained = runner.invoke(
+        app,
+        ["explain", memory_id, "--project", "alpha", "--query", "explain recalled memory"],
+    )
+
+    assert explained.exit_code == 0
+    assert "why_recalled" in explained.output
+    assert "score_details" in explained.output
+    assert "project_match" in explained.output
+
+
 def test_cli_pack_prints_run_and_total_token_savings(tmp_path, monkeypatch):
     monkeypatch.setenv("HIPPO_DB_PATH", str(tmp_path / "pack-token-stats.db"))
     runner = CliRunner()

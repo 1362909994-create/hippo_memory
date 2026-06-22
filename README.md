@@ -88,6 +88,7 @@ hippo project-init my-project
 hippo index-project D:\your_project --project my-project
 hippo write --project my-project --type decision --content "Use SQLite as the default local store."
 hippo search "previous decision about storage" --project my-project
+hippo explain <memory_id> --project my-project --query "previous decision about storage"
 hippo pack "continue the storage task" --project my-project
 hippo project-profile --project my-project
 hippo impact "change retrieval ranking" --project my-project

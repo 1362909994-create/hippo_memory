@@ -30,10 +30,12 @@ from hippocampus_memory.lsp_diagnostics import run_python_diagnostics
 from hippocampus_memory.mcp_server import serve_stdio
 from hippocampus_memory.memory_policy import auto_store_memories
 from hippocampus_memory.memory_writer import MemoryWriter
+from hippocampus_memory.models import MemoryRecord
 from hippocampus_memory.packer import MemoryPacker
 from hippocampus_memory.project_indexer import ProjectIndexer
 from hippocampus_memory.project_profile import ProjectProfileBuilder
 from hippocampus_memory.project_resolver import resolve_project_name, write_project_config
+from hippocampus_memory.ranker import RANKER_VERSION, explain_memory_score
 from hippocampus_memory.recall_policy import build_auto_context
 from hippocampus_memory.report import write_memory_browser
 from hippocampus_memory.retriever import Retriever
@@ -52,6 +54,7 @@ from hippocampus_memory.token_report import (
     token_ledger_report,
     token_savings_report,
 )
+from hippocampus_memory.utils import tokenize
 
 app = typer.Typer(help="Local-first external memory for AI agents.")
 
@@ -145,9 +148,42 @@ def search(
     )
     for result in results:
         typer.echo(
-            f"[{result.score:.3f}] "
-            f"{result.memory_type} {result.memory_id}: {result.content}"
+            f"[{result.score:.3f}] {result.memory_type} {result.memory_id}: {result.content}"
         )
+
+
+@app.command()
+def explain(
+    memory_id: str,
+    project: str | None = typer.Option(None, "--project"),
+    query: str | None = typer.Option(None, "--query"),
+) -> None:
+    """Explain why one memory would be recalled and how it is scored."""
+    db = get_db()
+    memory = db.get_memory(memory_id)
+    if memory is None:
+        raise typer.BadParameter(f"memory not found: {memory_id}")
+    scoring_project = resolve_project_name(project) if project is not None else memory.project
+    explanation = explain_memory_score(
+        memory,
+        keyword_score=_memory_keyword_score(query or "", memory),
+        project=scoring_project,
+    )
+    typer.echo(
+        {
+            "memory_id": memory.id,
+            "project": memory.project,
+            "memory_type": memory.memory_type,
+            "status": memory.status,
+            "visibility": memory.visibility,
+            "importance": memory.importance,
+            "confidence": memory.confidence,
+            "score": explanation.score,
+            "why_recalled": explanation.reason,
+            "score_details": explanation.factors,
+            "ranker_version": RANKER_VERSION,
+        }
+    )
 
 
 @app.command()
@@ -682,9 +718,7 @@ def index_project(path: Path, project: str | None = typer.Option(None, "--projec
     """Index a local project folder."""
     root = path.expanduser()
     if not root.exists() or not root.is_dir():
-        raise typer.BadParameter(
-            f"project path does not exist or is not a directory: {root}"
-        )
+        raise typer.BadParameter(f"project path does not exist or is not a directory: {root}")
     project = resolve_project_name(project, cwd=root)
     try:
         result = ProjectIndexer(get_db()).index_project(root, project)
@@ -834,6 +868,25 @@ def _project_root_path(db: Database, project: str) -> Path | None:
     if not record or not record.get("root_path"):
         return None
     return Path(str(record["root_path"]))
+
+
+def _memory_keyword_score(query: str, memory: MemoryRecord) -> float:
+    query_tokens = set(tokenize(query))
+    if not query_tokens:
+        return 0.0
+    haystack = " ".join(
+        [
+            memory.content,
+            memory.summary or "",
+            " ".join(memory.entities),
+            " ".join(memory.tags),
+            memory.project or "",
+        ]
+    )
+    memory_tokens = set(tokenize(haystack))
+    if not memory_tokens:
+        return 0.0
+    return min(1.0, len(query_tokens & memory_tokens) / max(1, len(query_tokens)))
 
 
 def _echo_token_savings(

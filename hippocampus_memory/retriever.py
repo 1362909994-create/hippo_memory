@@ -8,7 +8,7 @@ from hippocampus_memory.embedding import (
     create_embedding_backend,
 )
 from hippocampus_memory.models import MemoryRecord, SearchMode, SearchResult
-from hippocampus_memory.ranker import rank_memory
+from hippocampus_memory.ranker import explain_memory_score
 from hippocampus_memory.utils import normalize_text, text_similarity, tokenize
 from hippocampus_memory.vector_store import create_vector_store
 
@@ -115,7 +115,7 @@ class Retriever:
             memory = allowed_by_id.get(memory_id)
             if not memory:
                 continue
-            score, reason = rank_memory(
+            explanation = explain_memory_score(
                 memory,
                 keyword_score=keyword_scores.get(memory_id, 0.0),
                 semantic_score=semantic_scores.get(memory_id, 0.0),
@@ -123,7 +123,14 @@ class Retriever:
                 include_private=include_private,
                 include_sensitive=include_sensitive,
             )
-            results.append(to_result(memory, score, reason))
+            results.append(
+                to_result(
+                    memory,
+                    explanation.score,
+                    explanation.reason,
+                    explanation.factors,
+                )
+            )
 
         results.sort(key=lambda item: item.score, reverse=True)
         selected = _dedupe_results(results, top_k) if dedupe_results else results[:top_k]
@@ -204,7 +211,12 @@ def _lexical_fallback_scores(query: str, memories: dict[str, MemoryRecord]) -> d
     return scores
 
 
-def to_result(memory: MemoryRecord, score: float, reason: str) -> SearchResult:
+def to_result(
+    memory: MemoryRecord,
+    score: float,
+    reason: str,
+    score_details: dict[str, float] | None = None,
+) -> SearchResult:
     return SearchResult(
         memory_id=memory.id,
         content=memory.content,
@@ -219,4 +231,5 @@ def to_result(memory: MemoryRecord, score: float, reason: str) -> SearchResult:
         matched_reason=reason,
         entities=memory.entities,
         tags=memory.tags,
+        score_details=score_details or {},
     )

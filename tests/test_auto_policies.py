@@ -46,6 +46,27 @@ def test_memory_admission_skips_low_value_lines():
     assert decisions == []
 
 
+def test_auto_store_skips_near_duplicate_existing_memory(db):
+    MemoryWriter(db).write(
+        project="demo",
+        memory_type="task_state",
+        content="Current task is to finish automatic memory scheduling.",
+        importance=0.9,
+    )
+
+    result = auto_store_memories(
+        db,
+        "Current task is to finish automatic memory scheduling with tests.",
+        project="demo",
+    )
+
+    assert result["written"] == 0
+    assert result["queued"] == 0
+    assert result["duplicates"] == 1
+    assert result["items"][0]["outcome"] == "near_duplicate"
+    assert len(db.list_memories(project="demo")) == 1
+
+
 def test_auto_context_skips_small_talk(db):
     context = build_auto_context(db, intent="thanks", project="demo")
 

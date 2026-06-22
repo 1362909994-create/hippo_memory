@@ -76,6 +76,7 @@ class SearchResult:
     matched_reason: str
     entities: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
+    score_details: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
