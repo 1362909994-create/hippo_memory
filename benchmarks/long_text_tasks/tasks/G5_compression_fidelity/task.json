@@ -1,0 +1,11 @@
+{
+  "task_id": "G5_compression_fidelity",
+  "title": "Compression fidelity routing task",
+  "group": "G5_compression_fidelity",
+  "prompt": "Implement route_case(ticket) in routing_policy.py. The memory context should preserve subtle routing constraints while staying much shorter than the source archive.",
+  "source": {
+    "type": "generated-compression-memory",
+    "purpose": "validate meaning preservation under context compression"
+  }
+}
+

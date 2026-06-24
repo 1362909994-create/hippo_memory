@@ -55,6 +55,11 @@ include = ["hippocampus_memory*"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+exclude = [
+    "benchmarks/coding_tasks/runs",
+    "benchmarks/long_text_tasks/runs",
+    "output",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

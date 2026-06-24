@@ -1,0 +1,10 @@
+{
+  "task_id": "G1_smoke_hidden_long_rules",
+  "title": "Smoke hidden long-rule routing task",
+  "group": "G1_hidden_long_rule_task",
+  "prompt": "Implement route_case(ticket) in routing_policy.py. The visible prompt intentionally omits the detailed routing rules. Use only supplied memory context when available. Keep the function deterministic and side-effect free.",
+  "source": {
+    "type": "generated-long-rule-document",
+    "purpose": "smoke-test long document memory retrieval, relevance-gated injection, and A/B scoring"
+  }
+}

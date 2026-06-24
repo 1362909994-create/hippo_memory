@@ -6,6 +6,7 @@ from hippocampus_memory.cli import app
 from hippocampus_memory.mcp_server import HippoMcpServer
 from hippocampus_memory.memory_policy import auto_store_memories, plan_memory_admission
 from hippocampus_memory.memory_writer import MemoryWriter
+from hippocampus_memory.orchestrator.turn_orchestrator import TurnOrchestrator
 from hippocampus_memory.recall_policy import build_auto_context, decide_recall
 
 
@@ -24,6 +25,94 @@ def test_memory_admission_writes_high_confidence_decision(db):
     memories = db.list_memories(project="demo")
     assert memories[0].memory_type == "decision"
     assert "SQLite FTS" in memories[0].content
+
+
+def test_memory_admission_enriches_architecture_runtime_memories():
+    decisions = plan_memory_admission(
+        "\n".join(
+            [
+                "Architectural decision: TurnOrchestrator should remain the single "
+                "CLI/MCP/API entry point, while MemoryScheduler owns lifecycle "
+                "scheduling only.",
+                "Constraint: scheduler, policy, semantic, and world-model layers must "
+                "stay decoupled and communicate through reports.",
+            ]
+        ),
+        project="hippo",
+    )
+
+    assert {decision.memory_type for decision in decisions} >= {"decision", "constraint"}
+    assert all("architecture" in decision.tags for decision in decisions)
+    assert any("orchestrator" in decision.tags for decision in decisions)
+    assert any("scheduler" in decision.tags for decision in decisions)
+    assert any("policy" in decision.tags for decision in decisions)
+    assert any("semantic" in decision.tags for decision in decisions)
+    assert any("world_model" in decision.tags for decision in decisions)
+    assert any("TurnOrchestrator" in decision.entities for decision in decisions)
+    assert any("MemoryScheduler" in decision.entities for decision in decisions)
+    assert all("architecture runtime" in decision.reason for decision in decisions)
+
+
+def test_auto_store_architecture_memory_improves_next_architecture_recall(db):
+    store = auto_store_memories(
+        db,
+        "\n".join(
+            [
+                "Architectural decision: TurnOrchestrator should remain the single "
+                "CLI/MCP/API entry point, while MemoryScheduler owns lifecycle "
+                "scheduling only.",
+                "Constraint: scheduler, policy, semantic, and world-model layers must "
+                "stay decoupled and communicate through reports.",
+            ]
+        ),
+        project="hippo",
+    )
+
+    result = TurnOrchestrator(db).run_turn(
+        "Refactor memory_scheduler policy semantic world model orchestrator boundaries.",
+        context={"project": "hippo", "operation": "memory_search", "writeback": False},
+        mode="preview",
+    )
+
+    assert store["written"] == 2
+    assert "TurnOrchestrator" in result.injected_context
+    assert "MemoryScheduler" in result.injected_context
+    relevance = result.turn_context.context_budget["task_relevance"]
+    assert relevance["detected_task_intent"] == "architecture_refactor"
+    assert relevance["boosted_memories"]
+
+
+def test_auto_store_architecture_memory_persists_runtime_profile(db):
+    store = auto_store_memories(
+        db,
+        "\n".join(
+            [
+                "Architectural decision: TurnOrchestrator remains the CLI/MCP/API "
+                "entry point and MemoryScheduler owns lifecycle scheduling.",
+                "Constraint: policy, semantic, and world-model layers communicate "
+                "through reports instead of direct ownership.",
+            ]
+        ),
+        project="hippo",
+    )
+
+    memory_ids = [item["memory_id"] for item in store["items"] if item["memory_id"]]
+    profiles = [
+        db.get_memory(memory_id).metadata["architecture_runtime_profile"]
+        for memory_id in memory_ids
+    ]
+
+    assert store["written"] == 2
+    assert any("orchestrator" in profile["layers"] for profile in profiles)
+    assert any("scheduler" in profile["layers"] for profile in profiles)
+    assert any("policy" in profile["layers"] for profile in profiles)
+    assert any("semantic" in profile["layers"] for profile in profiles)
+    assert any("world_model" in profile["layers"] for profile in profiles)
+    assert any("CLI" in profile["interfaces"] for profile in profiles)
+    assert any("MCP" in profile["interfaces"] for profile in profiles)
+    assert any("API" in profile["interfaces"] for profile in profiles)
+    assert any("entry_point" in profile["boundary_signals"] for profile in profiles)
+    assert any("ownership" in profile["boundary_signals"] for profile in profiles)
 
 
 def test_memory_admission_queues_sensitive_memory_by_default(db):
@@ -133,7 +222,8 @@ def test_cli_auto_store_and_auto_context(tmp_path, monkeypatch):
 def test_mcp_auto_store_and_auto_context(db):
     server = HippoMcpServer(db, safe_tool_names=True, default_project="demo")
     initialized = server.handle({"jsonrpc": "2.0", "id": 0, "method": "initialize"})
-    assert "token_savings_text" in initialized["result"]["instructions"]
+    assert "token_savings_text" not in initialized["result"]["instructions"]
+    assert "Codex" not in initialized["result"]["instructions"]
 
     tools = server.handle({"jsonrpc": "2.0", "id": 0, "method": "tools/list"})
     names = [tool["name"] for tool in tools["result"]["tools"]]
@@ -170,8 +260,7 @@ def test_mcp_auto_store_and_auto_context(db):
         }
     )
     assert recalled["result"]["structuredContent"]["decision"]["action"] == "callback_pack"
-    assert "token_savings" in recalled["result"]["structuredContent"]
-    assert "token_savings_text" in recalled["result"]["structuredContent"]
-    assert "Show this token savings line to the user:" in recalled["result"]["content"][0]["text"]
-    assert "Token savings:" in recalled["result"]["content"][0]["text"]
-    assert "automatic context scheduler" in recalled["result"]["content"][0]["text"]
+    assert "token_savings_text" not in recalled["result"]["structuredContent"]
+    content_text = recalled["result"]["content"][0]["text"]
+    assert "Show this token savings line to the user:" not in content_text
+    assert "automatic context scheduler" in content_text

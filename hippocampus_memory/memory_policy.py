@@ -30,6 +30,7 @@ class MemoryAdmissionDecision:
     entities: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     score: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -57,6 +58,7 @@ def plan_memory_admission(
         decision = _classify_segment(normalized)
         if decision is None:
             continue
+        _enrich_architecture_runtime_memory(decision)
         if is_sensitive_text(normalized):
             decision.visibility = MemoryVisibility.SENSITIVE.value
             decision.reason += "; sensitive content detected"
@@ -338,8 +340,65 @@ def _tags_for(memory_type: str) -> list[str]:
     return _dedupe(["auto", memory_type])
 
 
-def _metadata_for_decision(decision: MemoryAdmissionDecision) -> dict[str, Any]:
+def _enrich_architecture_runtime_memory(decision: MemoryAdmissionDecision) -> None:
+    lowered = decision.content.casefold()
+    if not _looks_like_architecture_runtime_memory(lowered):
+        return
+    tags = ["architecture", "memory_os"]
+    entities: list[str] = []
+    for tag, needles, canonical_entities in _ARCHITECTURE_RUNTIME_SIGNALS:
+        if _has_any(lowered, needles):
+            tags.append(tag)
+            entities.extend(canonical_entities)
+    decision.tags = _dedupe([*decision.tags, *tags])
+    decision.entities = _dedupe([*decision.entities, *entities])[:12]
+    if "architecture runtime" not in decision.reason:
+        decision.reason += "; architecture runtime memory"
+    decision.metadata["architecture_runtime_profile"] = _architecture_runtime_profile(
+        lowered,
+        decision,
+    )
+    decision.importance = max(decision.importance, 0.82)
+    decision.score = max(
+        decision.score,
+        _score(decision.content, decision.confidence, decision.importance, decision.memory_type),
+    )
+
+
+def _looks_like_architecture_runtime_memory(lowered: str) -> bool:
+    if not _has_any(lowered, _ARCHITECTURE_RUNTIME_TERMS):
+        return False
+    return _has_any(lowered, _ARCHITECTURE_DECISION_TERMS)
+
+
+def _architecture_runtime_profile(
+    lowered: str,
+    decision: MemoryAdmissionDecision,
+) -> dict[str, Any]:
     return {
+        "layers": [tag for tag in decision.tags if tag in _ARCHITECTURE_LAYER_TAGS],
+        "interfaces": [
+            entity for entity in decision.entities if entity in _ARCHITECTURE_INTERFACE_ENTITIES
+        ],
+        "boundary_signals": _architecture_boundary_signals(lowered),
+        "canonical_entities": [
+            entity
+            for entity in decision.entities
+            if entity not in _ARCHITECTURE_INTERFACE_ENTITIES
+        ],
+    }
+
+
+def _architecture_boundary_signals(lowered: str) -> list[str]:
+    signals: list[str] = []
+    for name, needles in _ARCHITECTURE_BOUNDARY_SIGNALS:
+        if _has_any(lowered, needles):
+            signals.append(name)
+    return _dedupe(signals)
+
+
+def _metadata_for_decision(decision: MemoryAdmissionDecision) -> dict[str, Any]:
+    metadata = {
         "policy_version": POLICY_VERSION,
         "admission_reason": decision.reason,
         "admission_score": decision.score,
@@ -349,6 +408,8 @@ def _metadata_for_decision(decision: MemoryAdmissionDecision) -> dict[str, Any]:
         "tags": decision.tags,
         "ttl_days": decision.ttl_days,
     }
+    metadata.update(decision.metadata)
+    return metadata
 
 
 def _target_action(
@@ -556,4 +617,72 @@ _RULES: tuple[dict[str, Any], ...] = (
             "设计初衷",
         ),
     },
+)
+
+_ARCHITECTURE_RUNTIME_TERMS = (
+    "architecture",
+    "architectural",
+    "orchestrator",
+    "turnorchestrator",
+    "memoryscheduler",
+    "scheduler",
+    "policy",
+    "policyarbiter",
+    "semantic",
+    "world model",
+    "world-model",
+    "world_model",
+    "cognitive",
+    "cli/mcp/api",
+    "mcp",
+)
+
+_ARCHITECTURE_DECISION_TERMS = (
+    "decision",
+    "constraint",
+    "must",
+    "must not",
+    "should",
+    "should not",
+    "remain",
+    "owns",
+    "boundary",
+    "boundaries",
+    "decouple",
+    "decoupled",
+    "separate",
+    "separated",
+    "entry point",
+    "single entry",
+)
+
+_ARCHITECTURE_RUNTIME_SIGNALS: tuple[tuple[str, tuple[str, ...], list[str]], ...] = (
+    ("orchestrator", ("orchestrator", "turnorchestrator"), ["TurnOrchestrator"]),
+    ("scheduler", ("scheduler", "memoryscheduler"), ["MemoryScheduler"]),
+    ("policy", ("policy", "policyarbiter"), ["PolicyArbiter"]),
+    ("semantic", ("semantic",), ["SemanticMemoryModel"]),
+    ("world_model", ("world model", "world-model", "world_model"), ["MemoryWorldModel"]),
+    ("cognitive", ("cognitive",), ["CognitiveDriveEngine"]),
+    ("cli", ("cli",), ["CLI"]),
+    ("mcp", ("mcp",), ["MCP"]),
+    ("api", ("api",), ["API"]),
+)
+
+_ARCHITECTURE_LAYER_TAGS = {
+    "orchestrator",
+    "scheduler",
+    "policy",
+    "semantic",
+    "world_model",
+    "cognitive",
+}
+
+_ARCHITECTURE_INTERFACE_ENTITIES = {"CLI", "MCP", "API"}
+
+_ARCHITECTURE_BOUNDARY_SIGNALS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("entry_point", ("entry point", "single entry", "cli/mcp/api")),
+    ("ownership", ("owns", "ownership", "owner", "responsibility")),
+    ("decoupling", ("decouple", "decoupled", "separate", "separated")),
+    ("communication_contract", ("communicate", "through reports", "report", "interface")),
+    ("compatibility", ("compatibility", "compatible", "do not break", "without breaking")),
 )

@@ -11,18 +11,15 @@ from hippocampus_memory.change_planner import ChangePlanner
 from hippocampus_memory.code_graph import CodeGraphBuilder
 from hippocampus_memory.code_intelligence import CodeIntelligence
 from hippocampus_memory.code_map import CodeMapBuilder
+from hippocampus_memory.codex_workspace import CodexWorkspaceResolver
 from hippocampus_memory.consolidator import Consolidator
 from hippocampus_memory.db import Database
 from hippocampus_memory.deploy import (
-    deploy_reasonix,
-    install_reasonix_command_shims,
-    patch_reasonix_status_bar,
+    codex_doctor,
+    deploy_codex,
     project_mcp_database,
-    reasonix_doctor,
-    uninstall_reasonix_integration,
     write_daemon_script,
     write_mcp_client_config,
-    write_reasonix_bootstrap_context,
 )
 from hippocampus_memory.evaluator import evaluate_retrieval
 from hippocampus_memory.lsp_diagnostics import run_python_diagnostics
@@ -537,31 +534,47 @@ def mcp_project(root: Path = typer.Option(Path("."), "--root")) -> None:
     )
 
 
-@app.command("reasonix-deploy")
-def reasonix_deploy(
+@app.command("mcp-codex")
+def mcp_codex(
+    fallback_root: Path | None = typer.Option(
+        None,
+        "--fallback-root",
+        help="Fallback project root when Codex does not expose a workspace cwd.",
+    ),
+    auto_create: bool = typer.Option(
+        True,
+        "--auto-create/--no-auto-create",
+        help="Create a project-local .hippo database for the resolved Codex workspace.",
+    ),
+) -> None:
+    """Run MCP for Codex App, resolving the active workspace per tool call."""
+    serve_stdio(
+        project_mcp_database(fallback_root) if fallback_root is not None else get_db(),
+        safe_tool_names=True,
+        project_resolver=CodexWorkspaceResolver(
+            fallback_root=fallback_root,
+            auto_create=auto_create,
+        ),
+    )
+
+
+@app.command("codex-deploy")
+def codex_deploy(
     root: Path = typer.Option(Path("."), "--root"),
     project: str | None = typer.Option(None, "--project"),
-    config: Path | None = typer.Option(None, "--config"),
-    install_global: bool = typer.Option(
-        True,
-        "--install-global/--no-install-global",
-        help="Append the cwd-aware hippo MCP spec to ~/.reasonix/config.json.",
-    ),
     force_project_config: bool = typer.Option(False, "--force-project-config"),
     index: bool = typer.Option(True, "--index/--no-index"),
     project_memory: bool = typer.Option(
         True,
         "--project-memory/--no-project-memory",
-        help="Write a short REASONIX.md/AGENTS.md hint so Reasonix decides when to use hippo.",
+        help="Write a short AGENTS.md hint so Codex decides when to use hippo.",
     ),
 ) -> None:
-    """One-command project-local memory deployment for Reasonix."""
+    """One-command project-local memory deployment for Codex."""
     typer.echo(
-        deploy_reasonix(
+        deploy_codex(
             root=root,
             project=project,
-            config_path=config,
-            install_global=install_global,
             force_project_config=force_project_config,
             index_project=index,
             project_memory=project_memory,
@@ -569,85 +582,13 @@ def reasonix_deploy(
     )
 
 
-@app.command("reasonix-bootstrap-context")
-def reasonix_bootstrap_context(
-    root: Path = typer.Option(Path("."), "--root"),
-    output: Path = typer.Option(..., "--output"),
-    status_output: Path | None = typer.Option(None, "--status-output"),
-    intent: str = typer.Option(
-        "project overview and coding session bootstrap",
-        "--intent",
-    ),
-    auto_project: bool = typer.Option(
-        True,
-        "--auto-project/--no-auto-project",
-        help="Create a minimal project-local .hippo store on first Reasonix open.",
-    ),
-) -> None:
-    """Write the system-append context used by the Reasonix command shim."""
-    path = write_reasonix_bootstrap_context(
-        root=root,
-        output=output,
-        intent=intent,
-        status_output=status_output,
-        auto_project=auto_project,
-    )
-    typer.echo({"context_file": str(path)})
-
-
-@app.command("reasonix-install-shim")
-def reasonix_install_shim(bin_dir: Path | None = typer.Option(None, "--bin-dir")) -> None:
-    """Install the global Reasonix command shim that injects Hippo context."""
-    typer.echo(install_reasonix_command_shims(bin_dir))
-
-
-@app.command("reasonix-uninstall")
-def reasonix_uninstall(
-    root: Path | None = typer.Option(None, "--root"),
-    bin_dir: Path | None = typer.Option(None, "--bin-dir"),
-    config: Path | None = typer.Option(None, "--config"),
-    reasonix_dir: Path | None = typer.Option(None, "--reasonix-dir"),
-    remove_project_memory: bool = typer.Option(False, "--remove-project-memory"),
-    remove_project_data: bool = typer.Option(False, "--remove-project-data"),
-    remove_temp: bool = typer.Option(True, "--temp/--no-temp"),
-) -> None:
-    """Remove Hippo's Reasonix shim, UI patch, MCP entry, and optional project data."""
-    typer.echo(
-        uninstall_reasonix_integration(
-            root=root,
-            bin_dir=bin_dir,
-            config_path=config,
-            reasonix_dir=reasonix_dir,
-            remove_project_memory=remove_project_memory,
-            remove_project_data=remove_project_data,
-            remove_temp=remove_temp,
-        )
-    )
-
-
-@app.command("reasonix-patch-status-bar")
-def reasonix_patch_status_bar(
-    bin_dir: Path | None = typer.Option(None, "--bin-dir"),
-) -> None:
-    """Patch the installed Reasonix TUI to show Hippo token savings."""
-    typer.echo(patch_reasonix_status_bar(bin_dir))
-
-
 @app.command("doctor")
 def doctor(
     root: Path = typer.Option(Path("."), "--root"),
-    config: Path | None = typer.Option(None, "--config"),
-    bin_dir: Path | None = typer.Option(None, "--bin-dir"),
-    reasonix_dir: Path | None = typer.Option(None, "--reasonix-dir"),
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
 ) -> None:
-    """Diagnose Hippo's project-local Reasonix deployment without modifying files."""
-    report = reasonix_doctor(
-        root=root,
-        config_path=config,
-        bin_dir=bin_dir,
-        reasonix_dir=reasonix_dir,
-    )
+    """Diagnose Hippo's project-local Codex deployment without modifying files."""
+    report = codex_doctor(root=root)
     if json_output:
         typer.echo(json.dumps(report, indent=2, ensure_ascii=False))
     else:

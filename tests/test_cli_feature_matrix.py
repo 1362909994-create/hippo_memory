@@ -32,11 +32,8 @@ CLI_COMMANDS = [
     "run",
     "mcp",
     "mcp-project",
-    "reasonix-deploy",
-    "reasonix-bootstrap-context",
-    "reasonix-install-shim",
-    "reasonix-uninstall",
-    "reasonix-patch-status-bar",
+    "mcp-codex",
+    "codex-deploy",
     "doctor",
     "eval",
     "token-report",
@@ -253,7 +250,7 @@ def test_cli_queue_conflict_forget_and_artifact_workflow(tmp_path, monkeypatch):
             "--mode",
             "queue",
             "--text",
-            "Decision: keep Reasonix token savings wording conservative.",
+            "Decision: keep Codex MCP context short and architecture-focused.",
         ],
     )
     assert "'queued': 1" in queued.output
@@ -312,15 +309,15 @@ def test_cli_queue_conflict_forget_and_artifact_workflow(tmp_path, monkeypatch):
     _invoke_ok(runner, ["browser", "--output", str(browser), "--project", "demo"])
     assert json.loads(mcp_config.read_text(encoding="utf-8"))["mcpServers"]
     assert "9876" in daemon_script.read_text(encoding="utf-8")
-    assert "Reasonix" in browser.read_text(encoding="utf-8")
+    assert "Codex" in browser.read_text(encoding="utf-8")
 
     benchmark = tmp_path / "bench.jsonl"
     benchmark.write_text(
         json.dumps(
             {
-                "query": "Reasonix token savings wording",
+                "query": "Codex MCP context wording",
                 "project": "demo",
-                "expected_contains": ["conservative"],
+                "expected_contains": ["architecture-focused"],
             }
         )
         + "\n",

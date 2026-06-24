@@ -1,0 +1,11 @@
+{
+  "task_id": "G4_noise_suppression",
+  "title": "Noise suppression routing task",
+  "group": "G4_noise_suppression",
+  "prompt": "Implement route_case(ticket) in routing_policy.py. The relevant architecture rule is mixed with unrelated UI, install, and chat memories. Use only the relevant rule.",
+  "source": {
+    "type": "generated-noisy-memory-set",
+    "purpose": "validate irrelevant memory suppression"
+  }
+}
+

@@ -2,12 +2,37 @@ from __future__ import annotations
 
 from hippocampus_memory.conflict_detector import ConflictDetector
 from hippocampus_memory.db import Database
-from hippocampus_memory.models import SearchResult
+from hippocampus_memory.models import MemoryRecord, SearchResult
 from hippocampus_memory.retriever import Retriever
 from hippocampus_memory.utils import estimate_tokens, normalize_text, text_similarity
 
 LOW_CONFIDENCE_THRESHOLD = 0.7
 NEAR_DUPLICATE_SIMILARITY = 0.92
+
+_PROFILE_LAYER_TERMS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("orchestrator", ("orchestrator", "turnorchestrator")),
+    ("scheduler", ("scheduler", "memoryscheduler")),
+    ("policy", ("policy", "policyarbiter")),
+    ("semantic", ("semantic", "semanticmemorymodel")),
+    ("world_model", ("world model", "world-model", "world_model", "memoryworldmodel")),
+    ("cognitive", ("cognitive", "cognitivedriveengine")),
+)
+
+_PROFILE_INTERFACE_TERMS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("CLI", ("cli",)),
+    ("MCP", ("mcp",)),
+    ("API", ("api",)),
+)
+
+_PROFILE_INTERFACE_NAMES = {"CLI", "MCP", "API"}
+
+_PROFILE_BOUNDARY_TERMS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("entry_point", ("entry point", "single entry", "cli/mcp/api")),
+    ("ownership", ("owns", "ownership", "owner", "responsibility")),
+    ("decoupling", ("decouple", "decoupled", "separate", "separated")),
+    ("communication_contract", ("communicate", "through reports", "report", "interface")),
+    ("compatibility", ("compatibility", "compatible", "do not break", "without breaking")),
+)
 
 
 class MemoryPacker:
@@ -27,6 +52,7 @@ class MemoryPacker:
         source_chunk_limit: int = 2,
         compact: bool = False,
         exclude_memory_ids: list[str] | None = None,
+        preferred_memory_ids: list[str] | None = None,
         session_dedupe: bool = False,
     ) -> str:
         self.last_included_memory_ids = []
@@ -47,6 +73,8 @@ class MemoryPacker:
             excluded.update(self.seen_memory_ids)
         if excluded:
             results = [result for result in results if result.memory_id not in excluded]
+        if preferred_memory_ids:
+            results = _prioritize(results, preferred_memory_ids)
         deduped = _dedupe(results)
         conflicts = ConflictDetector(self.db).detect_for_project(project)
         sections = _group(deduped)
@@ -105,6 +133,11 @@ class MemoryPacker:
             sections["relevant"],
             max_items=limits["relevant"],
             included_ids=included_ids,
+        )
+        _extend_architecture_runtime_profile(
+            lines,
+            self.db,
+            [result.memory_id for result in deduped],
         )
         if conflicts and not compact:
             lines.append("Possible conflicts:")
@@ -181,6 +214,21 @@ def _dedupe(results: list[SearchResult]) -> list[SearchResult]:
     return output
 
 
+def _prioritize(
+    results: list[SearchResult],
+    preferred_memory_ids: list[str],
+) -> list[SearchResult]:
+    priority = {memory_id: index for index, memory_id in enumerate(preferred_memory_ids)}
+    default_priority = len(priority)
+    return [
+        result
+        for _, result in sorted(
+            enumerate(results),
+            key=lambda item: (priority.get(item[1].memory_id, default_priority), item[0]),
+        )
+    ]
+
+
 def _is_near_duplicate(text: str, seen_texts: list[str]) -> bool:
     if len(text) < 40:
         return False
@@ -243,6 +291,97 @@ def _format_result(result: SearchResult) -> str:
     if result.confidence < LOW_CONFIDENCE_THRESHOLD:
         return f"[low confidence {result.confidence:.2f}] {text}"
     return text
+
+
+def _extend_architecture_runtime_profile(
+    lines: list[str],
+    db: Database,
+    included_ids: list[str],
+) -> None:
+    profile = _collect_architecture_runtime_profile(db, included_ids)
+    if not profile:
+        return
+    lines.append("Architecture Runtime Profile:")
+    for label, key in (
+        ("Layers", "layers"),
+        ("Interfaces", "interfaces"),
+        ("Boundary signals", "boundary_signals"),
+        ("Entities", "canonical_entities"),
+    ):
+        values = profile.get(key, [])
+        if values:
+            lines.append(f"- {label}: {', '.join(values)}")
+
+
+def _collect_architecture_runtime_profile(
+    db: Database,
+    included_ids: list[str],
+) -> dict[str, list[str]]:
+    collected: dict[str, list[str]] = {
+        "layers": [],
+        "interfaces": [],
+        "boundary_signals": [],
+        "canonical_entities": [],
+    }
+    for memory_id in included_ids:
+        memory = db.get_memory(memory_id)
+        if memory is None:
+            continue
+        profile = memory.metadata.get("architecture_runtime_profile")
+        if not isinstance(profile, dict):
+            profile = _infer_architecture_runtime_profile(memory)
+        if not profile:
+            continue
+        for key in collected:
+            collected[key].extend(_string_items(profile.get(key)))
+    return {key: _dedupe_strings(values) for key, values in collected.items() if values}
+
+
+def _infer_architecture_runtime_profile(memory: MemoryRecord) -> dict[str, list[str]]:
+    text = " ".join(
+        [
+            memory.content,
+            memory.summary or "",
+            " ".join(memory.tags),
+            " ".join(memory.entities),
+        ]
+    ).casefold()
+    layers = [name for name, terms in _PROFILE_LAYER_TERMS if _has_any(text, terms)]
+    interfaces = [name for name, terms in _PROFILE_INTERFACE_TERMS if _has_any(text, terms)]
+    boundary_signals = [name for name, terms in _PROFILE_BOUNDARY_TERMS if _has_any(text, terms)]
+    canonical_entities = [
+        entity for entity in memory.entities if entity not in _PROFILE_INTERFACE_NAMES
+    ]
+    if not (layers or interfaces or boundary_signals or canonical_entities):
+        return {}
+    return {
+        "layers": layers,
+        "interfaces": interfaces,
+        "boundary_signals": boundary_signals,
+        "canonical_entities": canonical_entities,
+    }
+
+
+def _has_any(text: str, terms: tuple[str, ...]) -> bool:
+    return any(term in text for term in terms)
+
+
+def _string_items(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    output: list[str] = []
+    for value in values:
+        normalized = normalize_text(value)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        output.append(normalized)
+    return output
 
 
 def _suggest_next_step(sections: dict[str, list[SearchResult]], query: str) -> str:

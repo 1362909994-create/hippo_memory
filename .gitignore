@@ -13,3 +13,6 @@ venv/
 *.sqlite3
 .env
 tmp/
+output/
+benchmarks/coding_tasks/runs/
+benchmarks/long_text_tasks/runs/

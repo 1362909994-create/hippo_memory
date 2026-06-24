@@ -4,6 +4,7 @@ from hippocampus_memory.code_intelligence import CodeIntelligence
 from hippocampus_memory.code_map import CodeMapBuilder
 from hippocampus_memory.context_utils import parse_json_list
 from hippocampus_memory.db import Database
+from hippocampus_memory.models import SearchResult
 from hippocampus_memory.retriever import Retriever
 from hippocampus_memory.utils import estimate_tokens
 
@@ -15,8 +16,20 @@ class ChangePlanner:
         self.code_map = CodeMapBuilder(db)
         self.code_intelligence = CodeIntelligence(db)
 
-    def plan(self, intent: str, project: str, max_tokens: int = 1200) -> str:
+    def plan(
+        self,
+        intent: str,
+        project: str,
+        max_tokens: int = 1200,
+        exclude_memory_ids: list[str] | None = None,
+        preferred_memory_ids: list[str] | None = None,
+    ) -> str:
         memories = self.retriever.search(intent, project=project, top_k=8, search_mode="hybrid")
+        excluded = set(exclude_memory_ids or [])
+        if excluded:
+            memories = [memory for memory in memories if memory.memory_id not in excluded]
+        if preferred_memory_ids:
+            memories = _prioritize_memories(memories, preferred_memory_ids)
         files = self.code_map.relevant_files(project, intent, limit=8)
         symbol_impact = self.code_intelligence.impact_lines(project, intent, files)
         diagnostic_impact = self.code_intelligence.diagnostic_lines(project, files)
@@ -190,6 +203,21 @@ def _dedupe(items: list[str]) -> list[str]:
         seen.add(item)
         output.append(item)
     return output
+
+
+def _prioritize_memories(
+    memories: list[SearchResult],
+    preferred_memory_ids: list[str],
+) -> list[SearchResult]:
+    priority = {memory_id: index for index, memory_id in enumerate(preferred_memory_ids)}
+    default_priority = len(priority)
+    return [
+        memory
+        for _, memory in sorted(
+            enumerate(memories),
+            key=lambda item: (priority.get(item[1].memory_id, default_priority), item[0]),
+        )
+    ]
 
 
 def _trim(lines: list[str], max_tokens: int) -> str:

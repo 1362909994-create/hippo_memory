@@ -1,0 +1,12 @@
+{
+  "task_id": "C03_long_context_routing_memory",
+  "title": "Long-context memory task: recover buried routing policy",
+  "category": "C_memory_dependent",
+  "prompt": "Continue the prior long-context support routing policy. Implement route_case(ticket) in routing_policy.py. The current prompt intentionally omits the detailed routing table; use memory if available. Keep the public function name unchanged and run the hidden benchmark checker.",
+  "test_command": ["{python}", "{task_dir}/hidden_check.py"],
+  "fixture_strategy": "local_fixture",
+  "source": {
+    "type": "local-fixture-with-long-memory",
+    "purpose": "measure whether long external memory helps when detailed requirements are not in the prompt or workspace tests"
+  }
+}

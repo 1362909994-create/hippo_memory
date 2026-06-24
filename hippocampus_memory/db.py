@@ -10,6 +10,16 @@ from hippocampus_memory.models import MemoryRecord, MemoryStatus
 from hippocampus_memory.utils import cjk_search_terms, dumps_json, loads_json, stable_id, utc_now
 
 
+class _ManagedConnection(sqlite3.Connection):
+    """SQLite connection that closes when used as a context manager."""
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> bool | None:
+        try:
+            return super().__exit__(exc_type, exc, tb)
+        finally:
+            self.close()
+
+
 class Database:
     def __init__(self, path: str | Path | None = None, settings: Settings | None = None) -> None:
         self.settings = settings or Settings.from_env(path)
@@ -17,8 +27,13 @@ class Database:
 
     def connect(self) -> sqlite3.Connection:
         self.settings.ensure_parent()
-        conn = sqlite3.connect(self.path)
+        conn = sqlite3.connect(
+            self.path,
+            timeout=30.0,
+            factory=_ManagedConnection,
+        )
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 30000")
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 

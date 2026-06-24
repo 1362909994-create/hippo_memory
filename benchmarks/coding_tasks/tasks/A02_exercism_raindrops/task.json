@@ -1,0 +1,14 @@
+{
+  "task_id": "A02_exercism_raindrops",
+  "title": "Exercism-style Raindrops boundary task",
+  "category": "A_negative_control",
+  "fixture_strategy": "local_fixture",
+  "test_command": ["{python}", "-m", "pytest", "-q"],
+  "source": {
+    "type": "exercism-style",
+    "upstream": "https://github.com/exercism/python",
+    "license": "MIT",
+    "purpose": "negative control: memory should not distract from factor/edge-case reasoning"
+  },
+  "prompt": "Implement convert(number) for the raindrops exercise. Append Pling for factor 3, Plang for factor 5, and Plong for factor 7. If none apply, return the number as a string. Keep the public function name unchanged and run pytest."
+}

@@ -7,10 +7,12 @@ from pathlib import Path
 from typing import Any, Literal
 
 from hippocampus_memory.callback import callback_pack
+from hippocampus_memory.codegraph_bootstrap import attach_codegraph_bootstrap_suggestion
 from hippocampus_memory.context_bundle import ContextBundleBuilder
 from hippocampus_memory.db import Database
 from hippocampus_memory.memory_policy import auto_store_memories
 from hippocampus_memory.models import MemoryRecord, SearchResult
+from hippocampus_memory.orchestrator.memory_relevance_router import MemoryRelevanceRouter
 from hippocampus_memory.orchestrator.memory_scheduler import MemoryScheduler
 from hippocampus_memory.packer import MemoryPacker
 from hippocampus_memory.ranker import RANKER_VERSION, explain_memory_score
@@ -1121,13 +1123,20 @@ class TurnOrchestrator:
         policy_engine: DecisionPolicyEngine | None = None,
         policy_arbiter: PolicyArbiter | None = None,
         memory_scheduler: MemoryScheduler | None = None,
+        scheduler_state_path: str | Path | None = None,
+        memory_relevance_router: MemoryRelevanceRouter | None = None,
     ) -> None:
         self.db = db
         self.retriever = retriever or Retriever(db)
         self.decision_graph = decision_graph or TurnDecisionGraph.default()
         self.policy_engine = policy_engine or DecisionPolicyEngine.for_database(db)
         self.policy_arbiter = policy_arbiter or PolicyArbiter()
-        self.memory_scheduler = memory_scheduler or MemoryScheduler.for_database(db)
+        self.memory_scheduler = memory_scheduler or (
+            MemoryScheduler(db, state_path=scheduler_state_path)
+            if scheduler_state_path is not None
+            else MemoryScheduler.for_database(db)
+        )
+        self.memory_relevance_router = memory_relevance_router or MemoryRelevanceRouter()
         self._active_policy_project: str | None = None
         self._pending_policy_arbitrations: dict[str, PolicyArbitrationResult] = {}
         self._multi_policy_decision_history: list[PolicyArbitrationResult] = []
@@ -1292,7 +1301,11 @@ class TurnOrchestrator:
             "rank_memories",
             "ranked",
             {"operation": config.operation, "should_recall": state.get("should_recall")},
-            {"retrieved_count": len(results), "ranker_confidence": confidence},
+            {
+                "retrieved_count": len(results),
+                "ranker_confidence": confidence,
+                "task_relevance": turn_context.context_budget.get("task_relevance", {}),
+            },
         )
         return "ranked"
 
@@ -1588,6 +1601,10 @@ class TurnOrchestrator:
     ) -> TurnResult:
         decision = self._decide(input, config, turn_context)
         retrieved_memories = self._retrieve(input, config, turn_context)
+        preferred_memory_ids, exclude_memory_ids = self._task_relevance_memory_filters(
+            turn_context,
+            config,
+        )
         packer = MemoryPacker(self.db)
         pack = packer.pack(
             input,
@@ -1595,7 +1612,8 @@ class TurnOrchestrator:
             max_tokens=config.max_tokens,
             source_chunk_limit=config.source_chunk_limit,
             compact=config.compact,
-            exclude_memory_ids=config.exclude_memory_ids or None,
+            exclude_memory_ids=exclude_memory_ids or None,
+            preferred_memory_ids=preferred_memory_ids or None,
             session_dedupe=config.session_dedupe,
         )
         self._select(turn_context, retrieved_memories, packer.last_included_memory_ids, config)
@@ -1623,12 +1641,18 @@ class TurnOrchestrator:
         retrieved_memories = self._retrieve(input, config, turn_context)
         if not config.project:
             raise ValueError("project is required for context_bundle")
+        preferred_memory_ids, exclude_memory_ids = self._task_relevance_memory_filters(
+            turn_context,
+            config,
+        )
         bundle = ContextBundleBuilder(self.db).build(
             project=config.project,
             intent=input,
             max_tokens=config.max_tokens,
             include_code_map=config.include_code_map,
             strategy=config.bundle_strategy,
+            exclude_memory_ids=exclude_memory_ids or None,
+            preferred_memory_ids=preferred_memory_ids or None,
         )
         self._select(turn_context, retrieved_memories, [], config)
         payload = {"decision": decision.to_dict(), "text": bundle, "bundle": bundle}
@@ -1791,8 +1815,30 @@ class TurnOrchestrator:
             search_mode=config.search_mode,
             dedupe_results=config.dedupe_results,
         )
-        turn_context.retrieved_memories = results
-        return results
+        routed = self.memory_relevance_router.rerank(input, results)
+        turn_context.context_budget["task_relevance"] = routed.report.to_dict()
+        turn_context.retrieved_memories = routed.memories
+        return routed.memories
+
+    def _task_relevance_memory_filters(
+        self,
+        turn_context: TurnContext,
+        config: _TurnConfig,
+    ) -> tuple[list[str], list[str]]:
+        report = turn_context.context_budget.get("task_relevance", {})
+        suppressed = []
+        if isinstance(report, Mapping):
+            suppressed = _as_string_list(report.get("suppressed_memories"))
+        excluded = _unique_list([*config.exclude_memory_ids, *suppressed])
+        excluded_set = set(excluded)
+        preferred = _unique_list(
+            [
+                memory.memory_id
+                for memory in turn_context.retrieved_memories
+                if memory.memory_id not in excluded_set
+            ]
+        )
+        return preferred, excluded
 
     def _select(
         self,
@@ -1802,11 +1848,26 @@ class TurnOrchestrator:
         config: _TurnConfig,
     ) -> None:
         selected_ids = set(selected_memory_ids)
+        suppressed_ids = self._task_relevance_suppressed_ids(turn_context)
         turn_context.retrieved_memories = retrieved_memories
-        turn_context.selected_memories = [
-            memory for memory in retrieved_memories if memory.memory_id in selected_ids
-        ] or retrieved_memories[: config.selected_k]
+        if selected_ids:
+            selected = [
+                memory
+                for memory in retrieved_memories
+                if memory.memory_id in selected_ids and memory.memory_id not in suppressed_ids
+            ]
+        else:
+            selected = [
+                memory for memory in retrieved_memories if memory.memory_id not in suppressed_ids
+            ][: config.selected_k]
+        turn_context.selected_memories = selected
         self._trace_ranker(turn_context)
+
+    def _task_relevance_suppressed_ids(self, turn_context: TurnContext) -> set[str]:
+        report = turn_context.context_budget.get("task_relevance", {})
+        if not isinstance(report, Mapping):
+            return set()
+        return set(_as_string_list(report.get("suppressed_memories")))
 
     def _trace_ranker(self, turn_context: TurnContext) -> None:
         self._trace(
@@ -1824,6 +1885,7 @@ class TurnOrchestrator:
                 }
                 for memory in turn_context.selected_memories
             ],
+            task_relevance=turn_context.context_budget.get("task_relevance", {}),
         )
 
     def _finish(
@@ -1846,6 +1908,13 @@ class TurnOrchestrator:
                 "selected_k": config.selected_k,
                 "decision_action": decision_action,
             }
+        )
+        attach_codegraph_bootstrap_suggestion(
+            self.db,
+            project=config.project,
+            operation=config.operation,
+            context_budget=turn_context.context_budget,
+            recall_payload=recall_payload,
         )
         self._trace(
             turn_context,
@@ -1986,6 +2055,17 @@ class TurnOrchestrator:
             selected_memory_ids=[memory.memory_id for memory in turn_context.selected_memories],
             system_load=config.system_load,
         )
+        persistence_report = scheduler_report.persistence_report
+        if persistence_report.get("event") == "scheduler_state_save_failed":
+            turn_context.execution_trace.append(
+                TurnTraceEvent(
+                    node_id="scheduler",
+                    decision="state_save_failed",
+                    input_state={"operation": turn_context.context_budget.get("operation")},
+                    output_state=persistence_report,
+                    next_node=None,
+                )
+            )
         turn_context.context_budget["multi_policy_decision_history"] = [
             item.to_dict() for item in self._multi_policy_decision_history
         ]
@@ -2352,6 +2432,17 @@ def _as_string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value if item]
+
+
+def _unique_list(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    output: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        output.append(value)
+    return output
 
 
 def _string_list_or_none(value: Any) -> list[str] | None:

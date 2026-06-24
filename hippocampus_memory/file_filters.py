@@ -20,7 +20,6 @@ IGNORED_DIRS = {
     ".next",
     ".idea",
     ".vscode",
-    ".reasonix",
 }
 
 GENERATED_DIR_SUFFIXES = (

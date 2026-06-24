@@ -1,0 +1,10 @@
+{
+  "task_id": "G6_privacy_sensitive",
+  "title": "Privacy-sensitive memory filtering task",
+  "group": "G6_privacy_sensitive",
+  "prompt": "Implement route_case(ticket) in routing_policy.py. Use public project memory only. Private and sensitive memories must not appear in injected context.",
+  "source": {
+    "type": "generated-privacy-memory",
+    "purpose": "validate default privacy filtering and public rule recall"
+  }
+}

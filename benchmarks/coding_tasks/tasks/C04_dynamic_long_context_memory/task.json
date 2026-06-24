@@ -1,0 +1,12 @@
+{
+  "task_id": "C04_dynamic_long_context_memory",
+  "title": "Dynamic long-context memory task: recover run-specific routing policy",
+  "category": "C_memory_dependent",
+  "prompt": "Continue the prior dynamic long-context routing policy. Implement route_case(ticket) in routing_policy.py. The current prompt intentionally omits the detailed run-specific routing table; use memory if available. Keep the implementation deterministic and side-effect free.",
+  "test_command": ["{python}", "{generated_check}"],
+  "fixture_strategy": "local_fixture",
+  "source": {
+    "type": "local-fixture-with-dynamic-long-memory",
+    "purpose": "measure whether long external memory helps when hidden requirements are generated per run and not stored as plaintext task files"
+  }
+}

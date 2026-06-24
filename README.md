@@ -1,387 +1,425 @@
 # hippocampus-memory
 
-`hippocampus-memory` is a local-first Memory OS runtime for AI coding agents.
+[??](#??) | [English](#english)
 
-It is not a normal RAG project. The goal is not to dump large chat logs into a vector database and search them later. The goal is to give tools such as Reasonix, Codex, Claude Code, DeepSeek, and local agents a short, relevant, auditable working context for long-running software projects.
+---
 
-The project started as an external memory and Reasonix context compression tool. It has now evolved into a staged Memory Runtime OS: CLI, MCP, and API memory execution paths enter `TurnOrchestrator.run_turn()`, then pass through decision, policy, scheduler, semantic, world-model, and cognitive-drive layers.
+## ??
 
-## Status
+`hippocampus-memory` ???????? AI ????????????? **Codex-first Memory OS**?? Codex App ???????????????????????????????????????????? coding ???
 
-The project is runnable and test-covered, but the OS-level runtime architecture is still experimental.
+????? RAG??????????????????????? coding agent ???????Memory Pack?Project Profile?Code Map?Code Impact Pack?Context Bundle??? trace???????????
 
-Stable and usable today:
+### ????
 
-- Local SQLite memory store
-- Project-local memory isolation
-- Memory Pack
-- Project Profile
-- Code Map
-- Code Impact Pack
-- Context Bundle
-- Automatic recall
-- Automatic memory admission and candidate queue
-- CLI, lightweight MCP, and HTTP API entrypoints
-- Reasonix deployment helper, global shim, and status bar integration
-- Token savings estimation and per-session ledger
-- Turn Orchestrator routing for CLI/MCP/API memory flows
+????????? v3 ?????
 
-Implemented runtime architecture layers:
+- Codex App ?? MCP ?????? Codex App ???????????????? `.hippo/hippo.db`?
+- CLI / MCP / API ??????? `TurnOrchestrator.run_turn()`?
+- ??????????bug ???????????????????????????
+- Memory OS ???Decision Graph?Policy Governance?Memory Scheduler?Semantic Layer?World Model?Cognitive Drive?
+- ?????????????????????????? CodeGraph ???????????????
+- Codex ??????? A/B coding task?memory-dependent task?long-document benchmark ????????
+- Reasonix ?? UI / shim ??????????? Codex-first ???????????
 
-- Turn Orchestrator
-- Turn Decision Graph
-- Adaptive Policy Engine
-- Policy Governance and drift guardrails
-- Multi-policy arbitration
-- Memory Scheduler
-- L0/L1/L2/L3 Memory Hierarchy
-- Semantic Memory Model
-- Memory World Model
-- Cognitive Drive Engine
-
-Important boundary: the high-level OS, semantic, world-model, and cognitive-drive layers currently generate deterministic plans, reports, traces, and scheduler decisions. They do not silently mutate the memory database or launch uncontrolled background reasoning. This is intentional.
-
-## Why This Exists
-
-AI coding agents still have practical memory problems:
-
-1. They forget project decisions, constraints, and failure history when the conversation gets long.
-2. Putting everything into the prompt wastes tokens and often hurts attention.
-3. Manual copy-paste context workflows do not scale across real projects.
-
-`hippocampus-memory` keeps durable project memory outside the model context, then injects only the compact context needed for the current task.
-
-The design target is closer to an agent memory runtime than a chatbot memory plugin.
-
-## Architecture
+### ??
 
 ```mermaid
 flowchart TD
-    A[CLI / MCP / API / Reasonix] --> B[TurnOrchestrator.run_turn]
-    B --> C[Turn Decision Graph]
-    C --> D[Policy Engine / Policy Arbiter]
-    D --> E[Recall / Rank / Bundle / Writeback Adapters]
-    E --> F[Memory Scheduler]
-    F --> G[Memory Hierarchy L0-L3]
-    F --> H[Semantic Memory Layer]
-    H --> I[Memory World Model]
-    I --> J[Cognitive Drive Engine]
-    F --> K[Observability / Trace Reports]
+    A["Codex App / CLI / MCP / API"] --> B["TurnOrchestrator.run_turn()"]
+    B --> C["Turn Decision Graph"]
+    C --> D["Task Intent Detector"]
+    D --> E["Memory Relevance Router"]
+    E --> F["Context Bundle / Memory Pack"]
+    B --> G["Policy Arbiter + Governance"]
+    B --> H["Memory Scheduler"]
+    H --> I["Memory Hierarchy + Lifecycle"]
+    H --> J["Semantic Memory Layer"]
+    J --> K["World Model"]
+    K --> L["Cognitive Drive"]
+    B --> M["Trace / Token / Evaluation Reports"]
 ```
 
-Runtime flow:
+?????
 
-1. A CLI command, MCP tool call, API request, or Reasonix session starts a memory operation.
-2. `TurnOrchestrator.run_turn()` becomes the single memory runtime entrypoint.
-3. The decision graph decides whether to recall memory, use cache, inject context, skip memory, or fallback.
-4. Policy layers arbitrate recall, compression, latency, safety, and cost preferences.
-5. Existing core modules still perform retrieval, ranking, packing, context building, and memory admission.
-6. Scheduler, semantic, world-model, and cognitive-drive layers generate lifecycle plans, consistency reports, semantic fusion, reasoning propagation, and self-driven task proposals.
-7. The caller receives injected context plus structured trace data.
+- ????????????
+- ?????????????????
+- ?? / private ????????
+- ??????????????? prompt?
+- CLI / MCP / API ????????????????
+- CodeGraph?embedding?LLM ????????????????????
 
-Core memory modules are intentionally preserved:
+### ??
 
-- `recall_policy.py`
-- `context_bundle.py`
-- `memory_policy.py`
-- `ranker.py`
-- `consolidator.py`
-
-The Memory OS layers wrap and coordinate these modules instead of replacing them.
-
-## Core Concepts
-
-### Memory Pack
-
-A compact task-focused memory packet. It prioritizes decisions, constraints, failures, task state, and verified facts. Private and sensitive memories are excluded by default.
-
-### Project Profile
-
-A project-level summary with project purpose, current state, indexed files, recent memories, risks, unknowns, and implementation notes.
-
-### Code Map
-
-A compact map generated from indexed project files. Python symbol/import/call extraction uses the standard library AST first. Other languages currently use fallback heuristics.
-
-### Code Impact Pack
-
-A change-planning context pack. It helps an agent reason about likely affected files, risks, invariants, and useful tests before editing code.
-
-### Context Bundle
-
-The main context artifact injected into Reasonix or other AI coding tools. It can combine Project Profile, Memory Pack, Code Impact Pack, and Code Map within a bounded token budget.
-
-### Turn Orchestrator
-
-The unified runtime entrypoint for memory operations. CLI, MCP, and API flows route through this layer so trace, selected memories, injected context, and writeback behavior stay consistent.
-
-### Memory Scheduler
-
-A cross-turn lifecycle planning layer for decay, promotion, compression, eviction, hierarchy assignment, policy alignment, semantic consistency, and optimization reports.
-
-### Memory World Model
-
-A semantic graph that maps memories into entities, concepts, decisions, events, and patterns. It supports semantic fusion, contradiction detection, reasoning propagation, and global cognitive state reporting.
-
-### Cognitive Drive Engine
-
-A deterministic self-drive layer. It can generate internal goals from memory state, allocate attention to conflicts and uncertainty, select memory-driven tasks, and propose self-triggering reasoning or consolidation loops.
-
-It does not autonomously rewrite long-term memory without explicit runtime integration.
-
-## Installation
-
-Requirements:
-
-- Windows PowerShell for the provided Reasonix installer
-- Python 3.11+
-- Reasonix installed and available as `reasonix` on `PATH` if you want Reasonix integration
-
-Install and deploy for Reasonix:
+?????????
 
 ```powershell
-git clone https://github.com/1362909994-create/hippo_memory.git
-cd hippo_memory
-.\install-reasonix-hippo.ps1 -ProjectRoot D:\your_project -ProjectName your_project
-reasonix code D:\your_project
+python -m pip install -e .[quality,tokens]
 ```
 
-If Python 3.11+ is missing, the installer can try winget:
+????????????
 
 ```powershell
-.\install-reasonix-hippo.ps1 -InstallPythonWithWinget
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e .[quality,tokens]
 ```
 
-Developer install:
+### ??? Codex App
+
+?????? MCP ???? Codex App ???????????? workspace?
 
 ```powershell
-git clone https://github.com/1362909994-create/hippo_memory.git
-cd hippo_memory
-python -m pip install -e ".[quality,tokens]"
+hippo mcp-codex --fallback-root D:\codex\hippo_memory
 ```
 
-Optional extras:
+? `C:\Users\<you>\.codex\config.toml` ????
 
-```powershell
-python -m pip install -e ".[semantic,chroma,lsp,quality,tokens]"
+```toml
+[mcp_servers.hippo_memory]
+command = 'D:\codex\hippo_memory\.venv\Scripts\python.exe'
+args = ['-m', 'hippocampus_memory', 'mcp-codex', '--fallback-root', 'D:\codex\hippo_memory']
+startup_timeout_sec = 120
+
+[mcp_servers.hippo_memory.env]
+PYTHONIOENCODING = 'utf-8'
+PYTHONUTF8 = '1'
 ```
 
-The default path does not require Chroma, sentence-transformers, or an online LLM.
+?? Codex App ??
 
-## Reasonix Deployment
+- ? `D:\project_a` ?? Codex???? `D:\project_a\.hippo\hippo.db`?
+- ? `D:\project_b` ?? Codex???? `D:\project_b\.hippo\hippo.db`?
+- ???????????????????????
+- ????????????? CodeGraph bootstrap ???????????
 
-The one-command installer does the following:
-
-- Installs `hippocampus-memory`
-- Creates project-local `.hippo/hippo.db` and `.hippo.toml`
-- Indexes project files, summaries, symbols, imports, and calls
-- Adds `hippo_memory=hippo mcp-project` to Reasonix MCP config
-- Installs a global Reasonix shim
-- Generates a Context Bundle before `reasonix code ...`
-- Injects that bundle through Reasonix startup arguments
-- Patches the Reasonix status bar to show estimated Hippo token savings
-
-Deployment check:
+?????????????
 
 ```powershell
-hippo doctor --root D:\your_project
+hippo codex-deploy --root D:\your_project --project your_project
 hippo doctor --root D:\your_project --json
 ```
 
-Uninstall Reasonix integration:
+### CodeGraph ?????
+
+? hippo ????? workspace ???????????? `codegraph_bootstrap.recommended=true`???????
+
+1. Codex ??????????? CodeGraph ?????
+2. ??????Codex ?? CodeGraph MCP ??????????????????
+3. Codex ??????????? hippo-memory?
+4. hippo-memory ????????? candidate queue????????????????
+
+???????????????????????????????????????????
+
+### ????
 
 ```powershell
-.\uninstall-reasonix-hippo.ps1 -ProjectRoot D:\your_project -RemoveProjectData -UninstallPackage
-```
-
-Remove project prompt blocks as well:
-
-```powershell
-.\uninstall-reasonix-hippo.ps1 -ProjectRoot D:\your_project -RemoveProjectMemory
-```
-
-## Common Commands
-
-```powershell
-hippo project-init my-project
-hippo index-project D:\your_project --project my-project
-hippo write --project my-project --type decision --content "Use SQLite as the default local store."
-hippo search "previous decision about storage" --project my-project
-hippo explain <memory_id> --project my-project --query "previous decision about storage"
-hippo pack "continue the storage task" --project my-project
-hippo project-profile --project my-project
-hippo impact "change retrieval ranking" --project my-project
-hippo auto-context "fix retrieval ranking bug" --project my-project --metadata
-hippo auto-store --project my-project --text "Decision: rank exact project facts above generic source chunks."
-hippo token-report "continue current task" --project my-project
-hippo token-ledger --project my-project
+hippo write --project demo --type decision --content "Decision: keep MCP routing thin."
+hippo search "MCP routing" --project demo
+hippo pack "Refactor scheduler boundaries" --project demo --compact
+hippo auto-context "Fix failing scheduler policy test" --project demo --metadata
+hippo auto-store --project demo --text "Decision: policy and scheduler communicate through reports."
+hippo token-report "Refactor scheduler boundaries" --project demo
+hippo token-ledger --project demo
 hippo doctor --root D:\your_project --json
 ```
 
-Run the HTTP API:
+### MCP / Codex ????
+
+AGENTS.md ????????
+
+- ?? coding?debugging?architecture ??????? `hippo_memory_context_auto`?
+- ???????? `hippo_memory_code_symbols` ? `hippo_memory_code_references`?
+- ??????????? `hippo_memory_memory_auto_store`??????????????????
+- ?????????????????????
+
+### ???????
+
+?????? benchmark?
+
+1. `benchmarks/coding_tasks`?A/B coding task???????????????memory-dependent ???
+2. `benchmarks/long_text_tasks`???????? needle???????????????????????
+
+?? smoke?
 
 ```powershell
-hippo serve --host 127.0.0.1 --port 8765
+.\.venv\Scripts\python.exe -m benchmarks.coding_tasks.harness --mode dry_run --timestamp SMOKE
+.\.venv\Scripts\python.exe -m benchmarks.long_text_tasks.scripts.harness --mode local --timestamp SMOKE_LONG
 ```
 
-Run the lightweight JSON-RPC stdio MCP server:
+??????? Codex A/B?
 
 ```powershell
-hippo mcp
-hippo mcp-project
+.\.venv\Scripts\python.exe -m benchmarks.coding_tasks.harness --mode codex --timestamp AFTER_7_DAYS
+.\.venv\Scripts\python.exe -m benchmarks.long_text_tasks.scripts.harness --mode codex --timestamp AFTER_7_DAYS_LONG
 ```
 
-## API and MCP Routing
+???????? benchmark ? `runs/<timestamp>/` ???? patch?pytest ???`scores.json` ? `benchmark_report.md`???????? `.gitignore` ???????????
 
-Memory-related CLI, MCP, and API entrypoints now route through `TurnOrchestrator.run_turn()`.
+?????????
 
-Every turn can produce:
+- ????B ???? A ?????????????
+- ?????B ?????????????
+- ?????CLI / MCP / API ???????
+- ??????????????????????????????
 
-- `injected_context`
-- `execution_trace`
-- `retrieved_memories`
-- `selected_memories`
-- `context_budget`
-- scheduler, semantic, world-model, and cognitive-drive reports
+### ??
 
-This keeps behavior consistent across CLI, MCP, and HTTP API without rewriting the existing retrieval and packing modules.
-
-## Token Savings
-
-Token savings are estimates, not provider billing values.
-
-Approximate formula:
-
-```text
-saved_tokens = baseline_tokens - injected_context_tokens
-```
-
-This means the compressed Context Bundle is shorter than a naive full-context approach. It does not mean DeepSeek, Reasonix, OpenAI, Anthropic, or any other provider charged exactly that many fewer tokens.
-
-Why it cannot be exact today:
-
-- Hippo does not intercept the final provider request body.
-- A true counterfactual prompt without Hippo is not available.
-- Different providers tokenize text differently.
-- Reasonix status bar integration is a UI patch, not a billing meter.
-
-Use the status bar number as a compression signal, not an invoice.
-
-## Data and Privacy
-
-- Default storage is local SQLite.
-- Memories are project-scoped by default.
-- Private and sensitive memories are not recalled by default.
-- Sensitive content should go through explicit user-controlled flows.
-- Project indexing stores paths, hashes, summaries, symbols, imports, calls, and chunks; it should not be treated as a full source-code backup.
-- Chroma, sentence-transformers, and LLM summarizers are optional capabilities.
-
-## Testing
-
-Current verification commands:
+?????
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m pytest tests -q --basetemp tmp\pytest-full -p no:cacheprovider
 .\.venv\Scripts\ruff.exe check .
 ```
 
-Latest verified result:
+?????
 
-```text
-170 passed
-All checks passed
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_structural_validation.py -q
+.\.venv\Scripts\python.exe -m pytest tests/test_task_aware_retrieval.py -q
+.\.venv\Scripts\python.exe -m pytest tests/test_ab_memory_matrix.py -q
+.\.venv\Scripts\python.exe -m pytest tests/test_codex_only_runtime.py -q
+.\.venv\Scripts\python.exe -m pytest tests/test_codegraph_bootstrap.py -q
 ```
 
-Test coverage includes:
+### ????
 
-- SQLite schema, CRUD, soft delete, hard delete
-- Memory writer and retriever behavior
-- Ranking, filtering, and deduplication
-- Memory Pack and Context Bundle generation
-- Project indexing and Python AST extraction
-- Project Profile, Code Map, Code Impact Pack
-- Automatic recall and automatic store policy
-- Candidate queue and conflict handling
-- Token report and token ledger
-- Reasonix deploy, shim, status patch, and uninstall helpers
-- Turn Orchestrator
-- Decision Policy Engine
-- Entrypoint routing through orchestrator
-- Memory Scheduler
-- Semantic model, world model, and cognitive drive layer
+```text
+hippocampus_memory/
+  cli.py                         # CLI entrypoint
+  mcp_server.py                  # MCP server
+  context_bundle.py              # Context Bundle builder
+  memory_policy.py               # Memory write / capture policy
+  orchestrator/
+    turn_orchestrator.py         # Runtime kernel
+    task_intent.py               # Task intent detector
+    memory_relevance_router.py   # Task-aware memory reranker
+    memory_scheduler.py          # Lifecycle scheduler and OS layers
+benchmarks/
+  coding_tasks/                  # A/B coding benchmark definitions
+  long_text_tasks/               # Long-document benchmark definitions
+docs/
+  PROJECT_REPORT.md
+  CODEX_APP_MEMORY_DEPLOYMENT_AND_EVALUATION.md
+tests/
+  ...                            # Unit, integration, acceptance, benchmark tests
+```
 
-Known test gaps:
+### ????
 
-- Real Reasonix UI end-to-end automation
-- Fresh Windows install matrix
-- Long-session multi-project Reasonix resume testing
-- Large-scale memory benchmark
-- Real provider billing comparison
-- Full MCP SDK compatibility testing
+- ??????? Codex memory runtime??????? agent?
+- Token ?????????????????
+- CodeGraph bootstrap ????????????? CodeGraph MCP?
+- ???????????????????????????????
+- ??????????????????????????????? candidate queue ?????
 
-## What This Is Not
+---
 
-This project is not:
+## English
 
-- A general-purpose vector database UI
-- A hosted memory SaaS
-- A replacement for source control
-- A precise token billing system
-- A fully autonomous agent that rewrites its memory without supervision
-- A complete language server or exact whole-program call graph
+`hippocampus-memory` is a local-first external memory runtime for AI coding agents. The current direction is **Codex-first Memory OS**: Codex App can open any project, resolve that project's own memory database, inject compact auditable context, and evaluate whether memory actually improves coding performance.
 
-It is a local memory runtime for AI coding workflows.
+This is not a generic RAG demo. The core outputs are coding-agent context artifacts: Memory Pack, Project Profile, Code Map, Code Impact Pack, Context Bundle, execution traces, policy reports, and benchmark data.
 
-## Comparison With Related Systems
+### Current Status
 
-Compared with generic RAG:
+The project is a usable v3 prototype:
 
-- Hippo focuses on compact working context, not large-document Q&A.
-- It prioritizes project memory, decisions, failures, constraints, and code impact.
-- It treats memory admission, compression, decay, conflict, and traceability as first-class concerns.
+- Global Codex App MCP deployment with per-project `.hippo/hippo.db` resolution.
+- CLI / MCP / API flows are routed through `TurnOrchestrator.run_turn()`.
+- Task-aware retrieval for architecture refactors, bug fixes, debugging, code understanding, and general queries.
+- Memory OS layers: Decision Graph, Policy Governance, Memory Scheduler, Semantic Layer, World Model, and Cognitive Drive.
+- Cold-start support for existing projects through optional CodeGraph bootstrap.
+- Codex-focused evaluation: A/B coding tasks, memory-dependent tasks, long-document benchmarks, and structural validation tests.
+- Reasonix-specific UI patches and shims have been removed; the project now focuses on Codex-first runtime memory.
 
-Compared with hosted memory systems such as Mem0, Zep, or Letta-style agent memory:
+### Architecture
 
-- Hippo is local-first and coding-workflow-specific.
-- Its core artifact is the Context Bundle / Memory Pack rather than a chat memory response.
-- Its current strongest integration target is Reasonix and local AI coding CLIs.
-- It is less mature as a hosted product and has fewer production integrations.
+```mermaid
+flowchart TD
+    A["Codex App / CLI / MCP / API"] --> B["TurnOrchestrator.run_turn()"]
+    B --> C["Turn Decision Graph"]
+    C --> D["Task Intent Detector"]
+    D --> E["Memory Relevance Router"]
+    E --> F["Context Bundle / Memory Pack"]
+    B --> G["Policy Arbiter + Governance"]
+    B --> H["Memory Scheduler"]
+    H --> I["Memory Hierarchy + Lifecycle"]
+    H --> J["Semantic Memory Layer"]
+    J --> K["World Model"]
+    K --> L["Cognitive Drive"]
+    B --> M["Trace / Token / Evaluation Reports"]
+```
 
-## Roadmap
+Design rules:
 
-Highest priority:
+- Recall quality matters more than memory volume.
+- Memory is local-first by default.
+- Sensitive and private memories are not recalled by default.
+- The system should not inject full chat history or large source-code dumps.
+- CLI / MCP / API compatibility must be preserved while internals evolve.
+- CodeGraph, embeddings, and LLM summarization remain optional and must degrade safely.
 
-- Real Reasonix UI E2E tests
-- Stronger memory admission gate
-- Better benchmark datasets for recall quality
-- Safer token savings presentation
-- Full MCP SDK adapter while preserving current tool semantics
-- Better documentation for scheduler, world model, and cognitive drive reports
+### Installation
 
-Medium priority:
+From the repository root:
 
-- More robust code graph and impact analysis
-- Better cross-project isolation and migration tools
-- Policy explainability UI or report command
-- Larger performance benchmark across many memories and large repos
+```powershell
+python -m pip install -e .[quality,tokens]
+```
 
-Lower priority or likely to cut:
+With the repository virtual environment:
 
-- Heavy standalone browser UI
-- Early productization for every non-Reasonix CLI
-- Complex background daemons before core memory quality is proven
-- Integrations that require intercepting provider secrets or final request bodies
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e .[quality,tokens]
+```
 
-## Development Principles
+### Deploy For Codex App
 
-- Do not turn the project into ordinary RAG.
-- Do not recall private or sensitive memories by default.
-- Do not write uncertain memories directly into long-term memory.
-- Keep Memory Pack and Context Bundle short, stable, and auditable.
-- Preserve backward compatibility for CLI, MCP, API, and database migrations.
-- Keep optional heavy dependencies optional.
-- Prefer reversible orchestration layers over blind rewrites of core memory logic.
+Use one global MCP entry so Codex App can resolve the active workspace automatically:
 
-## License
+```powershell
+hippo mcp-codex --fallback-root D:\codex\hippo_memory
+```
 
-No license file is currently included. Add one before publishing this as a reusable public package.
+Add this to `C:\Users\<you>\.codex\config.toml`:
+
+```toml
+[mcp_servers.hippo_memory]
+command = 'D:\codex\hippo_memory\.venv\Scripts\python.exe'
+args = ['-m', 'hippocampus_memory', 'mcp-codex', '--fallback-root', 'D:\codex\hippo_memory']
+startup_timeout_sec = 120
+
+[mcp_servers.hippo_memory.env]
+PYTHONIOENCODING = 'utf-8'
+PYTHONUTF8 = '1'
+```
+
+After restarting Codex App:
+
+- Opening Codex in `D:\project_a` uses `D:\project_a\.hippo\hippo.db`.
+- Opening Codex in `D:\project_b` uses `D:\project_b\.hippo\hippo.db`.
+- New and existing projects start accumulating memory from the point of deployment.
+- Existing code projects can optionally use CodeGraph bootstrap to seed structural code memory.
+
+Project-local deployment is also available:
+
+```powershell
+hippo codex-deploy --root D:\your_project --project your_project
+hippo doctor --root D:\your_project --json
+```
+
+### CodeGraph Bootstrap
+
+When hippo detects that the current workspace is an existing code project, it can return `codegraph_bootstrap.recommended=true`.
+
+Recommended flow:
+
+1. Codex asks the user for permission to inspect CodeGraph project structure.
+2. After approval, Codex queries the CodeGraph MCP for modules, symbols, call relationships, and architecture summaries.
+3. Codex sends a compressed structure summary to hippo-memory.
+4. hippo-memory queues the result as a candidate memory by default instead of writing uncertain facts directly into long-term memory.
+
+This helps old projects avoid a cold start without storing large source-code dumps or unverified conclusions.
+
+### Common Commands
+
+```powershell
+hippo write --project demo --type decision --content "Decision: keep MCP routing thin."
+hippo search "MCP routing" --project demo
+hippo pack "Refactor scheduler boundaries" --project demo --compact
+hippo auto-context "Fix failing scheduler policy test" --project demo --metadata
+hippo auto-store --project demo --text "Decision: policy and scheduler communicate through reports."
+hippo token-report "Refactor scheduler boundaries" --project demo
+hippo token-ledger --project demo
+hippo doctor --root D:\your_project --json
+```
+
+### MCP / Codex Usage
+
+Recommended AGENTS.md behavior:
+
+- At the start of non-trivial coding, debugging, or architecture work, call `hippo_memory_context_auto`.
+- For direct symbol questions, use `hippo_memory_code_symbols` or `hippo_memory_code_references`.
+- Near the end of meaningful work, call `hippo_memory_memory_auto_store` with concise high-confidence, non-sensitive information.
+- Do not write low-value chat fragments merely to increase memory volume.
+
+### Evaluation
+
+The repository includes two benchmark groups:
+
+1. `benchmarks/coding_tasks`: A/B coding tasks covering pure algorithms, project-context tasks, and memory-dependent tasks.
+2. `benchmarks/long_text_tasks`: long-document tasks covering needles, rule conflicts, noise suppression, compression fidelity, and privacy-sensitive content.
+
+Smoke runs:
+
+```powershell
+.\.venv\Scripts\python.exe -m benchmarks.coding_tasks.harness --mode dry_run --timestamp SMOKE
+.\.venv\Scripts\python.exe -m benchmarks.long_text_tasks.scripts.harness --mode local --timestamp SMOKE_LONG
+```
+
+After using the system for a while, run Codex A/B benchmarks:
+
+```powershell
+.\.venv\Scripts\python.exe -m benchmarks.coding_tasks.harness --mode codex --timestamp AFTER_7_DAYS
+.\.venv\Scripts\python.exe -m benchmarks.long_text_tasks.scripts.harness --mode codex --timestamp AFTER_7_DAYS_LONG
+```
+
+Each run writes artifacts under `runs/<timestamp>/`, including patches, pytest logs, `scores.json`, and `benchmark_report.md`. Run outputs are ignored by git and should not be committed.
+
+Useful review dimensions:
+
+- Correctness: does memory reduce missed constraints and wrong edits?
+- Change scope: does memory keep edits smaller and more targeted?
+- Regression risk: do CLI / MCP / API contracts stay compatible?
+- Long-context behavior: are hidden rules, cross-session decisions, and old constraints recalled correctly?
+
+### Tests
+
+Full verification:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests -q --basetemp tmp\pytest-full -p no:cacheprovider
+.\.venv\Scripts\ruff.exe check .
+```
+
+Focused suites:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_structural_validation.py -q
+.\.venv\Scripts\python.exe -m pytest tests/test_task_aware_retrieval.py -q
+.\.venv\Scripts\python.exe -m pytest tests/test_ab_memory_matrix.py -q
+.\.venv\Scripts\python.exe -m pytest tests/test_codex_only_runtime.py -q
+.\.venv\Scripts\python.exe -m pytest tests/test_codegraph_bootstrap.py -q
+```
+
+### Repository Layout
+
+```text
+hippocampus_memory/
+  cli.py                         # CLI entrypoint
+  mcp_server.py                  # MCP server
+  context_bundle.py              # Context Bundle builder
+  memory_policy.py               # Memory write / capture policy
+  orchestrator/
+    turn_orchestrator.py         # Runtime kernel
+    task_intent.py               # Task intent detector
+    memory_relevance_router.py   # Task-aware memory reranker
+    memory_scheduler.py          # Lifecycle scheduler and OS layers
+benchmarks/
+  coding_tasks/                  # A/B coding benchmark definitions
+  long_text_tasks/               # Long-document benchmark definitions
+docs/
+  PROJECT_REPORT.md
+  CODEX_APP_MEMORY_DEPLOYMENT_AND_EVALUATION.md
+tests/
+  ...                            # Unit, integration, acceptance, benchmark tests
+```
+
+### Known Limitations
+
+- This is a Codex memory runtime, not a complete autonomous agent.
+- Token savings are heuristic estimates, not billing measurements.
+- CodeGraph bootstrap requires user approval and an available CodeGraph MCP.
+- Memory recall reduces context loss but does not replace tests, review, or static analysis.
+- Low-quality long-term memories can hurt retrieval quality; use benchmarks and candidate queues to keep memory clean.

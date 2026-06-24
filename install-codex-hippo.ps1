@@ -14,10 +14,6 @@ function Write-Step([string]$Message) {
   Write-Host "[hippo] $Message" -ForegroundColor Cyan
 }
 
-function Write-Warn([string]$Message) {
-  Write-Host "[hippo] WARNING: $Message" -ForegroundColor Yellow
-}
-
 function Find-Python311 {
   $candidates = @(
     @{ File = "py"; PrefixArgs = @("-3.11") },
@@ -48,7 +44,7 @@ function Invoke-SelectedPython([hashtable]$Python, [string[]]$Arguments) {
   & $Python.File @allArgs
 }
 
-function Get-HippoCommand([hashtable]$Python) {
+function Get-HippoCommand {
   $cmd = Get-Command hippo -ErrorAction SilentlyContinue
   if ($cmd) {
     return $cmd.Source
@@ -100,19 +96,12 @@ if ($Editable) {
 $pipArgs += $pipTarget
 Invoke-SelectedPython $python $pipArgs
 
-$hippo = Get-HippoCommand $python
+$hippo = Get-HippoCommand
 Write-Step "hippo command: $hippo"
 
-if (-not (Get-Command reasonix -ErrorAction SilentlyContinue)) {
-  Write-Warn "reasonix was not found on PATH. Install Reasonix before opening a memory-enabled CLI."
-}
-
-Write-Step "installing Reasonix global shim and status bar patch."
-& $hippo reasonix-install-shim
-
 if (-not $NoDeploy) {
-  Write-Step "deploying project-local memory for Reasonix."
-  $deployArgs = @("reasonix-deploy", "--root", $resolvedProjectRoot)
+  Write-Step "deploying project-local memory for Codex."
+  $deployArgs = @("codex-deploy", "--root", $resolvedProjectRoot)
   if ($ProjectName) {
     $deployArgs += @("--project", $ProjectName)
   }
@@ -127,7 +116,5 @@ if (-not $NoDeploy) {
 
 Write-Step "done."
 Write-Host ""
-Write-Host "Open a new Reasonix session with:" -ForegroundColor Green
-Write-Host "  reasonix code `"$resolvedProjectRoot`"" -ForegroundColor Green
-Write-Host ""
-Write-Host "If PowerShell cannot find hippo/reasonix in this window, close and reopen the terminal."
+Write-Host "Open Codex in this project and keep AGENTS.md available to the session:" -ForegroundColor Green
+Write-Host "  $resolvedProjectRoot" -ForegroundColor Green

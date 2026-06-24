@@ -1,0 +1,13 @@
+{
+  "task_id": "B02_codex_doctor_check",
+  "title": "Project-context task: add Codex doctor validation",
+  "category": "B_project_context",
+  "fixture_strategy": "current_repo",
+  "test_command": ["{python}", "-m", "pytest", "tests/test_codex_clean_install_acceptance.py", "tests/test_install_script.py", "-q"],
+  "source": {
+    "type": "local-project",
+    "upstream": "D:/codex/hippo_memory",
+    "purpose": "measure whether memory improves deployment/doctor compatibility work"
+  },
+  "prompt": "Add a new non-destructive hippo doctor check for Codex deployments that reports whether the project-local MCP config points at hippo mcp-project with the expected root. Do not write user-level Codex config, do not reintroduce Reasonix deployment commands, and keep existing doctor JSON fields compatible."
+}

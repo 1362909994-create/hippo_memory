@@ -1,0 +1,13 @@
+{
+  "task_id": "C01_scheduler_boundary_memory",
+  "title": "Memory-dependent task: continue scheduler boundary decision",
+  "category": "C_memory_dependent",
+  "fixture_strategy": "current_repo",
+  "test_command": ["{python}", "-m", "pytest", "tests/test_codex_runtime_acceptance.py", "tests/test_ab_memory_matrix.py", "-q"],
+  "source": {
+    "type": "local-project-with-memory",
+    "upstream": "D:/codex/hippo_memory",
+    "purpose": "measure whether cross-session memory changes decisions when prompt omits prior boundaries"
+  },
+  "prompt": "Continue the previous scheduler decoupling plan using the boundaries we decided last time. Implement the smallest safe change and keep compatibility with current Codex CLI/MCP/API behavior. The prompt intentionally omits the detailed boundary rules; use memory if available."
+}

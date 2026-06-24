@@ -1,0 +1,13 @@
+{
+  "task_id": "C02_codex_deployment_memory",
+  "title": "Memory-dependent task: apply prior Codex deployment lessons",
+  "category": "C_memory_dependent",
+  "fixture_strategy": "current_repo",
+  "test_command": ["{python}", "-m", "pytest", "tests/test_codex_clean_install_acceptance.py", "tests/test_codex_cli_probe_acceptance.py", "tests/test_codex_resilience_acceptance.py", "-q"],
+  "source": {
+    "type": "local-project-with-memory",
+    "upstream": "D:/codex/hippo_memory",
+    "purpose": "measure whether memory recalls prior environment/deployment pitfalls"
+  },
+  "prompt": "Improve the Codex deployment diagnostic based on the deployment issue we hit previously. Keep it non-destructive and project-local. The prompt intentionally does not describe the previous issue; use memory if available."
+}

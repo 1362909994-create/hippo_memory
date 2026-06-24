@@ -20,15 +20,46 @@ class ContextBundleBuilder:
         max_tokens: int = 3500,
         include_code_map: bool = True,
         strategy: str = "auto",
+        exclude_memory_ids: list[str] | None = None,
+        preferred_memory_ids: list[str] | None = None,
     ) -> str:
         strategy = _normalize_strategy(strategy)
         if strategy == "auto":
-            return self._build_auto(project, intent, max_tokens, include_code_map)
+            return self._build_auto(
+                project,
+                intent,
+                max_tokens,
+                include_code_map,
+                exclude_memory_ids,
+                preferred_memory_ids,
+            )
         if strategy == "lean":
-            return self._build_lean(project, intent, max_tokens, include_code_map, "lean")
+            return self._build_lean(
+                project,
+                intent,
+                max_tokens,
+                include_code_map,
+                "lean",
+                exclude_memory_ids,
+                preferred_memory_ids,
+            )
         if strategy == "pack":
-            return self._build_pack_only(project, intent, max_tokens)
-        return self._build_full(project, intent, max_tokens, include_code_map, "full")
+            return self._build_pack_only(
+                project,
+                intent,
+                max_tokens,
+                exclude_memory_ids,
+                preferred_memory_ids,
+            )
+        return self._build_full(
+            project,
+            intent,
+            max_tokens,
+            include_code_map,
+            "full",
+            exclude_memory_ids,
+            preferred_memory_ids,
+        )
 
     def _build_auto(
         self,
@@ -36,10 +67,28 @@ class ContextBundleBuilder:
         intent: str,
         max_tokens: int,
         include_code_map: bool,
+        exclude_memory_ids: list[str] | None,
+        preferred_memory_ids: list[str] | None,
     ) -> str:
         if _wants_project_overview(intent):
-            return self._build_full(project, intent, max_tokens, include_code_map, "auto:full")
-        return self._build_lean(project, intent, max_tokens, include_code_map, "auto:lean")
+            return self._build_full(
+                project,
+                intent,
+                max_tokens,
+                include_code_map,
+                "auto:full",
+                exclude_memory_ids,
+                preferred_memory_ids,
+            )
+        return self._build_lean(
+            project,
+            intent,
+            max_tokens,
+            include_code_map,
+            "auto:lean",
+            exclude_memory_ids,
+            preferred_memory_ids,
+        )
 
     def _build_full(
         self,
@@ -48,12 +97,30 @@ class ContextBundleBuilder:
         max_tokens: int,
         include_code_map: bool,
         strategy: str,
+        exclude_memory_ids: list[str] | None,
+        preferred_memory_ids: list[str] | None,
     ) -> str:
         sections = [
             _section("Git Snapshot", format_git_snapshot(git_snapshot())),
             _section("Project Profile", ProjectProfileBuilder(self.db).build(project)),
-            _section("Memory Pack", MemoryPacker(self.db).pack(intent, project=project)),
-            _section("Code Impact Pack", ChangePlanner(self.db).plan(intent, project=project)),
+            _section(
+                "Memory Pack",
+                MemoryPacker(self.db).pack(
+                    intent,
+                    project=project,
+                    exclude_memory_ids=exclude_memory_ids,
+                    preferred_memory_ids=preferred_memory_ids,
+                ),
+            ),
+            _section(
+                "Code Impact Pack",
+                ChangePlanner(self.db).plan(
+                    intent,
+                    project=project,
+                    exclude_memory_ids=exclude_memory_ids,
+                    preferred_memory_ids=preferred_memory_ids,
+                ),
+            ),
         ]
         if include_code_map:
             sections.append(
@@ -73,6 +140,8 @@ class ContextBundleBuilder:
         max_tokens: int,
         include_code_map: bool,
         strategy: str,
+        exclude_memory_ids: list[str] | None,
+        preferred_memory_ids: list[str] | None,
     ) -> str:
         impact_budget = max(500, min(1000, max_tokens // 2))
         pack_budget = max(350, min(900, max_tokens // 3))
@@ -86,6 +155,8 @@ class ContextBundleBuilder:
                     project=project,
                     max_tokens=pack_budget,
                     compact=True,
+                    exclude_memory_ids=exclude_memory_ids,
+                    preferred_memory_ids=preferred_memory_ids,
                 ),
             ),
             _section(
@@ -94,6 +165,8 @@ class ContextBundleBuilder:
                     intent,
                     project=project,
                     max_tokens=impact_budget,
+                    exclude_memory_ids=exclude_memory_ids,
+                    preferred_memory_ids=preferred_memory_ids,
                 ),
             ),
         ]
@@ -107,13 +180,22 @@ class ContextBundleBuilder:
         header = _header(project, intent, strategy)
         return _trim("\n".join([*header, *sections]), max_tokens=max_tokens)
 
-    def _build_pack_only(self, project: str, intent: str, max_tokens: int) -> str:
+    def _build_pack_only(
+        self,
+        project: str,
+        intent: str,
+        max_tokens: int,
+        exclude_memory_ids: list[str] | None,
+        preferred_memory_ids: list[str] | None,
+    ) -> str:
         header = _header(project, intent, "pack")
         pack = MemoryPacker(self.db).pack(
             intent,
             project=project,
             max_tokens=max_tokens,
             compact=True,
+            exclude_memory_ids=exclude_memory_ids,
+            preferred_memory_ids=preferred_memory_ids,
         )
         return _trim("\n".join([*header, _section("Memory Pack", pack)]), max_tokens=max_tokens)
 

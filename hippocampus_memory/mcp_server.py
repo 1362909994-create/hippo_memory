@@ -9,6 +9,8 @@ from typing import Any
 from hippocampus_memory.change_planner import ChangePlanner
 from hippocampus_memory.code_intelligence import CodeIntelligence
 from hippocampus_memory.code_map import CodeMapBuilder
+from hippocampus_memory.codegraph_bootstrap import CodeGraphBootstrapper
+from hippocampus_memory.codex_workspace import CodexWorkspaceResolver
 from hippocampus_memory.db import Database
 from hippocampus_memory.lsp_diagnostics import run_python_diagnostics
 from hippocampus_memory.memory_writer import MemoryWriter
@@ -144,6 +146,23 @@ TOOLS: dict[str, dict[str, Any]] = {
             },
         },
     },
+    "codegraph.bootstrap": {
+        "description": (
+            "Confirm CodeGraph-assisted project bootstrap by previewing, queueing, "
+            "or writing compressed structural memories."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["codegraph_summary"],
+            "properties": {
+                "project": {"type": "string"},
+                "root_path": {"type": "string"},
+                "codegraph_summary": {"type": "string"},
+                "mode": {"type": "string", "enum": ["preview", "queue", "write"]},
+                "max_items": {"type": "integer"},
+            },
+        },
+    },
     "context.bundle": {
         "description": "Generate a full Context Bundle.",
         "inputSchema": {
@@ -207,9 +226,10 @@ SERVER_INSTRUCTIONS = (
     "Hippocampus Memory provides external memory and compact context. "
     "For non-trivial coding, debugging, project-review, or architecture tasks, call "
     "`context_auto`/`hippo_memory_context_auto` before reading lots of files. "
-    "When the result includes `token_savings_text` or says "
-    "`Show this token savings line to the user:`, include that token savings line in "
-    "the final user-facing reply. Near the end of meaningful work, call "
+    "Keep recalled context short and cite files when making code claims. "
+    "If a result includes `codegraph_bootstrap.recommended`, ask the user for approval "
+    "before calling `codegraph_bootstrap`; never bootstrap-write automatically. "
+    "Near the end of meaningful work, call "
     "`memory_auto_store`/`hippo_memory_memory_auto_store` with a concise session summary."
 )
 
@@ -221,10 +241,14 @@ class HippoMcpServer:
         *,
         safe_tool_names: bool = False,
         default_project: str | None = None,
+        scheduler_state_path: str | Path | None = None,
+        project_resolver: CodexWorkspaceResolver | None = None,
     ) -> None:
         self.db = db
         self.safe_tool_names = safe_tool_names
         self.default_project = default_project
+        self.scheduler_state_path = scheduler_state_path
+        self.project_resolver = project_resolver
 
     def handle(self, message: dict[str, Any]) -> dict[str, Any] | None:
         method = message.get("method")
@@ -270,30 +294,28 @@ class HippoMcpServer:
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         name = CANONICAL_TOOL_NAMES.get(name, name)
+        db, arguments, scheduler_state_path = self._tool_context(arguments)
         if name == "memory.write":
-            result = MemoryWriter(self.db).write(**arguments)
+            result = MemoryWriter(db).write(**arguments)
             return {"memory_id": result.memory_id, "created": result.created}
         if name == "memory.search":
-            arguments = self._with_default_project(arguments)
-            turn = TurnOrchestrator(self.db).run_turn(
+            turn = self._orchestrator(db, scheduler_state_path).run_turn(
                 str(arguments["query"]),
                 context={**arguments, "operation": "memory_search", "writeback": False},
                 mode="preview",
             )
             return turn.runtime_payload()
         if name == "memory.pack":
-            arguments = self._with_default_project(arguments)
-            turn = TurnOrchestrator(self.db).run_turn(
+            turn = self._orchestrator(db, scheduler_state_path).run_turn(
                 str(arguments["query"]),
                 context={**arguments, "operation": "memory_pack", "writeback": False},
                 mode="preview",
             )
             return turn.runtime_payload()
         if name == "memory.auto_store":
-            arguments = self._with_default_project(arguments)
             store_mode = str(arguments.get("mode", "auto"))
             dry_run = bool(arguments.get("dry_run", False))
-            turn = TurnOrchestrator(self.db).run_turn(
+            turn = self._orchestrator(db, scheduler_state_path).run_turn(
                 str(arguments["text"]),
                 context={
                     **arguments,
@@ -305,12 +327,12 @@ class HippoMcpServer:
             )
             return turn.runtime_payload()
         if name == "project.profile":
-            return {"text": ProjectProfileBuilder(self.db).build(str(arguments["project"]))}
+            return {"text": ProjectProfileBuilder(db).build(str(arguments["project"]))}
         if name == "project.impact":
-            return {"text": ChangePlanner(self.db).plan(**arguments)}
+            return {"text": ChangePlanner(db).plan(**arguments)}
         if name == "code.symbols":
             return {
-                "symbols": CodeIntelligence(self.db).search_symbols(
+                "symbols": CodeIntelligence(db).search_symbols(
                     str(arguments["project"]),
                     query=arguments.get("query"),
                     limit=int(arguments.get("limit", 20)),
@@ -318,7 +340,7 @@ class HippoMcpServer:
             }
         if name == "code.references":
             return {
-                "references": CodeIntelligence(self.db).references(
+                "references": CodeIntelligence(db).references(
                     str(arguments["project"]),
                     symbol=str(arguments["symbol"]),
                     limit=int(arguments.get("limit", 50)),
@@ -328,22 +350,22 @@ class HippoMcpServer:
             project = str(arguments["project"])
             intent = str(arguments["intent"])
             limit = int(arguments.get("limit", 8))
-            files = CodeMapBuilder(self.db).relevant_files(project, intent, limit=limit)
-            lines = CodeIntelligence(self.db).impact_lines(project, intent, files, limit=limit)
+            files = CodeMapBuilder(db).relevant_files(project, intent, limit=limit)
+            lines = CodeIntelligence(db).impact_lines(project, intent, files, limit=limit)
             return {"text": "\n".join(lines), "lines": lines}
         if name == "code.diagnostics":
             project = str(arguments["project"])
             if not arguments.get("refresh"):
                 return {
-                    "diagnostics": CodeIntelligence(self.db).diagnostics(
+                    "diagnostics": CodeIntelligence(db).diagnostics(
                         project,
                         limit=int(arguments.get("limit", 100)),
                     )
                 }
-            root_path = arguments.get("path") or _project_root_path(self.db, project) or "."
+            root_path = arguments.get("path") or _project_root_path(db, project) or "."
             result = run_python_diagnostics(root_path, checker=arguments.get("checker"))
             if result["available"]:
-                self.db.replace_code_diagnostics(
+                db.replace_code_diagnostics(
                     project=project,
                     diagnostics=result["diagnostics"],
                     source=Path(str(result["tool"])).name,
@@ -352,9 +374,22 @@ class HippoMcpServer:
                 **result,
                 "diagnostics": [asdict(diagnostic) for diagnostic in result["diagnostics"]],
             }
+        if name == "codegraph.bootstrap":
+            project = str(arguments.get("project") or "")
+            root_path = (
+                arguments.get("root_path")
+                or arguments.get("root")
+                or (_project_root_path(db, project) if project else None)
+            )
+            return CodeGraphBootstrapper(db).apply(
+                project=project,
+                root_path=str(root_path) if root_path else None,
+                codegraph_summary=str(arguments["codegraph_summary"]),
+                mode=str(arguments.get("mode", "queue")),
+                max_items=int(arguments.get("max_items", 6)),
+            )
         if name == "context.bundle":
-            arguments = self._with_default_project(arguments)
-            turn = TurnOrchestrator(self.db).run_turn(
+            turn = self._orchestrator(db, scheduler_state_path).run_turn(
                 str(arguments["intent"]),
                 context={
                     **arguments,
@@ -366,21 +401,19 @@ class HippoMcpServer:
             )
             return turn.runtime_payload()
         if name == "context.auto":
-            arguments = self._with_default_project(arguments)
-            turn = TurnOrchestrator(self.db).run_turn(
+            turn = self._orchestrator(db, scheduler_state_path).run_turn(
                 str(arguments["intent"]),
                 context={
                     **arguments,
                     "operation": "auto_context",
-                    "track_token_savings": True,
-                    "include_savings_in_text": True,
+                    "track_token_savings": False,
+                    "include_savings_in_text": False,
                 },
                 mode="preview",
             )
             return turn.runtime_payload()
         if name == "context.callback":
-            arguments = self._with_default_project(arguments)
-            turn = TurnOrchestrator(self.db).run_turn(
+            turn = self._orchestrator(db, scheduler_state_path).run_turn(
                 str(arguments["intent"]),
                 context={**arguments, "operation": "context_callback", "writeback": False},
                 mode="preview",
@@ -388,14 +421,14 @@ class HippoMcpServer:
             return turn.runtime_payload()
         if name == "candidate.list":
             return {
-                "candidates": self.db.list_candidates(
+                "candidates": db.list_candidates(
                     project=arguments.get("project"),
                     status=arguments.get("status", "pending"),
                 )
             }
         if name == "conflict.list":
             return {
-                "conflicts": self.db.list_conflicts(
+                "conflicts": db.list_conflicts(
                     project=arguments.get("project"),
                     limit=int(arguments.get("limit", 100)),
                 )
@@ -407,24 +440,52 @@ class HippoMcpServer:
             return arguments
         return {**arguments, "project": self.default_project}
 
+    def _tool_context(
+        self,
+        arguments: dict[str, Any],
+    ) -> tuple[Database, dict[str, Any], Path | None]:
+        if self.project_resolver is None:
+            return self.db, self._with_default_project(arguments), self.scheduler_state_path
+        resolved = self.project_resolver.resolve(arguments)
+        return resolved.db, resolved.arguments, resolved.scheduler_state_path
+
+    def _orchestrator(
+        self,
+        db: Database,
+        scheduler_state_path: str | Path | None = None,
+    ) -> TurnOrchestrator:
+        state_path = (
+            scheduler_state_path
+            if scheduler_state_path is not None
+            else self.scheduler_state_path
+        )
+        if state_path is None:
+            return TurnOrchestrator(db)
+        return TurnOrchestrator(
+            db,
+            scheduler_state_path=state_path,
+        )
+
 
 def serve_stdio(
     db: Database,
     *,
     safe_tool_names: bool = False,
     default_project: str | None = None,
+    project_resolver: CodexWorkspaceResolver | None = None,
 ) -> None:
     server = HippoMcpServer(
         db,
         safe_tool_names=safe_tool_names,
         default_project=default_project,
+        project_resolver=project_resolver,
     )
     for line in sys.stdin:
         if not line.strip():
             continue
         response = server.handle(json.loads(line))
         if response is not None:
-            sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+            sys.stdout.write(json.dumps(response, ensure_ascii=True) + "\n")
             sys.stdout.flush()
 
 

@@ -89,6 +89,107 @@ def test_pack_marks_low_confidence_memory(db):
     assert "[low confidence 0.50]" in pack
 
 
+def test_pack_renders_architecture_runtime_profile(db):
+    MemoryWriter(db).write(
+        project="demo",
+        memory_type="decision",
+        content=(
+            "Architectural decision: TurnOrchestrator remains the CLI/MCP/API entry point "
+            "and MemoryScheduler owns lifecycle scheduling."
+        ),
+        importance=0.9,
+        metadata={
+            "architecture_runtime_profile": {
+                "layers": ["orchestrator", "scheduler"],
+                "interfaces": ["CLI", "MCP", "API"],
+                "boundary_signals": ["entry_point", "ownership"],
+                "canonical_entities": ["TurnOrchestrator", "MemoryScheduler"],
+            }
+        },
+    )
+
+    pack = MemoryPacker(db).pack(
+        "orchestrator scheduler architecture boundary",
+        project="demo",
+        compact=True,
+    )
+
+    assert "Architecture Runtime Profile:" in pack
+    assert "Layers: orchestrator, scheduler" in pack
+    assert "Interfaces: CLI, MCP, API" in pack
+    assert "Boundary signals: entry_point, ownership" in pack
+
+
+def test_compact_pack_profiles_include_relevant_memories_hidden_by_section_limits(db):
+    writer = MemoryWriter(db)
+    writer.write(
+        project="demo",
+        memory_type="decision",
+        content="Architectural decision: scheduler policy semantic world model profile metadata.",
+        importance=0.95,
+        metadata={
+            "architecture_runtime_profile": {
+                "layers": ["scheduler", "policy", "semantic", "world_model"],
+                "interfaces": [],
+                "boundary_signals": [],
+                "canonical_entities": ["MemoryScheduler", "PolicyArbiter"],
+            }
+        },
+    )
+    writer.write(
+        project="demo",
+        memory_type="decision",
+        content=(
+            "Architectural decision: TurnOrchestrator remains the CLI/MCP/API entry point "
+            "and MemoryScheduler owns lifecycle scheduling."
+        ),
+        importance=0.8,
+        metadata={
+            "architecture_runtime_profile": {
+                "layers": ["orchestrator", "scheduler"],
+                "interfaces": ["CLI", "MCP", "API"],
+                "boundary_signals": ["entry_point", "ownership"],
+                "canonical_entities": ["TurnOrchestrator", "MemoryScheduler"],
+            }
+        },
+    )
+
+    pack = MemoryPacker(db).pack(
+        "scheduler policy semantic world model orchestrator architecture boundary",
+        project="demo",
+        compact=True,
+    )
+
+    assert pack.count("Architectural decision:") == 1
+    assert "Interfaces: CLI, MCP, API" in pack
+    assert "Boundary signals: entry_point, ownership" in pack
+
+
+def test_pack_infers_architecture_profile_for_legacy_memory_without_metadata(db):
+    MemoryWriter(db).write(
+        project="demo",
+        memory_type="decision",
+        content=(
+            "Architectural decision: TurnOrchestrator remains the CLI/MCP/API entry point "
+            "and owns turn orchestration while MemoryScheduler owns lifecycle scheduling."
+        ),
+        tags=["architecture", "orchestrator", "scheduler"],
+        entities=["TurnOrchestrator", "MemoryScheduler", "CLI", "MCP", "API"],
+        importance=0.9,
+    )
+
+    pack = MemoryPacker(db).pack(
+        "TurnOrchestrator MemoryScheduler CLI MCP API entry point ownership",
+        project="demo",
+        compact=True,
+    )
+
+    assert "Architecture Runtime Profile:" in pack
+    assert "Layers: orchestrator, scheduler" in pack
+    assert "Interfaces: CLI, MCP, API" in pack
+    assert "Boundary signals: entry_point, ownership" in pack
+
+
 def test_compact_pack_reduces_small_task_overhead(db):
     writer = MemoryWriter(db)
     for idx in range(6):

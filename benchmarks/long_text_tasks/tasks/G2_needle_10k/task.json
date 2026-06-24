@@ -1,0 +1,11 @@
+{
+  "task_id": "G2_needle_10k",
+  "title": "Needle-in-haystack routing rule at 10k scale",
+  "group": "G2_needle_in_haystack",
+  "prompt": "Implement route_case(ticket) in routing_policy.py. The deciding rule is buried in a long operational archive. Use only supplied memory context when available. Keep the function deterministic and side-effect free.",
+  "source": {
+    "type": "generated-long-document",
+    "purpose": "validate exact rule recall from a 10k-character haystack"
+  }
+}
+

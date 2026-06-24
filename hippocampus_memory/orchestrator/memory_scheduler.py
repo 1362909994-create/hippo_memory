@@ -975,6 +975,7 @@ class SchedulerReport:
     stability_report: dict[str, Any] = field(default_factory=dict)
     load_report: dict[str, Any] = field(default_factory=dict)
     semantic_report: dict[str, Any] = field(default_factory=dict)
+    persistence_report: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -989,6 +990,7 @@ class SchedulerReport:
             "stability_report": self.stability_report,
             "load_report": self.load_report,
             "semantic_report": self.semantic_report,
+            "persistence_report": self.persistence_report,
         }
 
 
@@ -1121,8 +1123,8 @@ class MemoryScheduler:
             stability_report=stability_report,
             load_report=load_report,
             semantic_report=semantic_report,
+            persistence_report=self.save(),
         )
-        self.save()
         return report
 
     def schedule_lifecycle(
@@ -1488,12 +1490,25 @@ class MemoryScheduler:
         )
         return dict(self.state.system_parameters)
 
-    def save(self) -> None:
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        self.state_path.write_text(
-            json.dumps(self.state.to_dict(), ensure_ascii=False, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
+    def save(self) -> dict[str, Any]:
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            self.state_path.write_text(
+                json.dumps(self.state.to_dict(), ensure_ascii=False, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            return {
+                "status": "failed",
+                "event": "scheduler_state_save_failed",
+                "state_path": str(self.state_path),
+                "error": str(exc),
+            }
+        return {
+            "status": "saved",
+            "event": "scheduler_state_saved",
+            "state_path": str(self.state_path),
+        }
 
     def _load_state(self) -> SchedulerState:
         if not self.state_path.exists():

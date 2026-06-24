@@ -1,0 +1,13 @@
+{
+  "task_id": "B01_split_memory_scheduler",
+  "title": "Project-context task: decouple MemoryScheduler reports",
+  "category": "B_project_context",
+  "fixture_strategy": "current_repo",
+  "test_command": ["{python}", "-m", "pytest", "tests/test_codex_runtime_acceptance.py", "tests/test_memory_scheduler.py", "-q"],
+  "source": {
+    "type": "local-project",
+    "upstream": "D:/codex/hippo_memory",
+    "purpose": "measure whether memory improves architecture-boundary changes in hippo_memory"
+  },
+  "prompt": "Refactor memory_scheduler and related orchestration glue so scheduling reports, semantic/world-model reports, and policy reports are easier to reason about without changing CLI/MCP/API behavior. Keep changes small, preserve existing public payload keys, and run the targeted tests."
+}

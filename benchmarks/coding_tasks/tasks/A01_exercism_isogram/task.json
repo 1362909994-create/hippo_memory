@@ -1,0 +1,14 @@
+{
+  "task_id": "A01_exercism_isogram",
+  "title": "Exercism-style Isogram negative-control task",
+  "category": "A_negative_control",
+  "fixture_strategy": "local_fixture",
+  "test_command": ["{python}", "-m", "pytest", "-q"],
+  "source": {
+    "type": "exercism-style",
+    "upstream": "https://github.com/exercism/python",
+    "license": "MIT",
+    "purpose": "negative control: memory should not make pure algorithm tasks worse"
+  },
+  "prompt": "Implement is_isogram(text) so it returns whether a word or phrase has no repeated letters. Ignore spaces and hyphens, compare letters case-insensitively, and leave the public function name unchanged. Run the included pytest suite."
+}

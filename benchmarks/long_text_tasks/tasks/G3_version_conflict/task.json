@@ -1,0 +1,11 @@
+{
+  "task_id": "G3_version_conflict",
+  "title": "Version conflict memory routing task",
+  "group": "G3_version_conflict",
+  "prompt": "Implement route_case(ticket) in routing_policy.py. Use the active latest rule when multiple historical versions conflict. Do not use stale versions.",
+  "source": {
+    "type": "generated-conflict-memory",
+    "purpose": "validate active-version selection and stale-memory rejection"
+  }
+}
+
